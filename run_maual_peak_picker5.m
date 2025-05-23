@@ -58,7 +58,7 @@ function manual_ied_loader_gui()
    
     % select the channel to adjust IEDs on 
     selectChanBtn = uibutton(leftLayout, ...
-        'Text', 'Select IED Channel', ...
+        'Text', 'Marking Channel', ...
         'ButtonPushedFcn', @(btn,event) launch_channel_selector(fig));
 
     % Confirm/save peak button (same width as others now)
@@ -103,10 +103,11 @@ function manual_ied_loader_gui()
     fig.UserData.fs = [];            % Sampling rate
     % subject information on the GUI
     fig.UserData.subjectInfoLabel = uilabel(fig, ...
-    'Text', 'Subject Info: N/A', ...
-    'FontWeight', 'bold', ...
-    'FontSize', 14, ...
-    'Position', [350 figHeight - 80 800 25]);  % Adjust position as needed
+        'Text', 'Subject Info: N/A', ...
+        'FontWeight', 'bold', ...
+        'FontSize', 14, ...
+        'HorizontalAlignment', 'left', ...
+        'Position', [180 figHeight - 65 figWidth - 40 30]);  % 🔧 wider and taller
 
     main_map = load('main_channels_map.mat', 'main_channels_map');
     fig.UserData.main_channels_map = main_map.main_channels_map;
@@ -489,8 +490,6 @@ function save_peak_time(fig)
 
     ied_idx = fig.UserData.currentIED;
     rel_time = fig.UserData.peakLineTime;
-    disp(['confirmed_peak_times(' num2str(ied_idx) ') = ', num2str(fig.UserData.confirmed_peak_times(ied_idx))]);
-
 
     % ✅ Check if this IED was previously saved
     already_saved = ~isnan(fig.UserData.confirmed_peak_times(ied_idx));
@@ -512,6 +511,8 @@ function save_peak_time(fig)
    % ✅ Save corrected time
     abs_time = fig.UserData.original_ied_times_sec(ied_idx) + rel_time;
     fig.UserData.confirmed_peak_times(ied_idx) = abs_time;
+    disp(['confirmed_peak_times(' num2str(ied_idx) ') = ', num2str(fig.UserData.confirmed_peak_times(ied_idx))]);
+
 
     % If it's the first time, mark it as adjusted
     if ~already_saved
@@ -645,38 +646,69 @@ end
 
 %%
 function launch_channel_selector(fig)
-    % Use classic figure instead of uifigure for non-blocking behavior
+    % Use classic figure for compatibility
     d = figure('Name', 'Select Bipolar Channel for IED', ...
                'NumberTitle', 'off', ...
                'MenuBar', 'none', ...
                'ToolBar', 'none', ...
-               'Position', [300 300 300 350]);
+               'Position', [300 300 350 400]);
 
-    % Listbox
-    lb = uicontrol('Style', 'listbox', ...
-                   'String', fig.UserData.channelnames_bipolar, ...
-                   'Position', [20 80 260 240], ...
+    % Determine which bipolar labels involve a main channel
+    all_labels = fig.UserData.channelnames_bipolar;
+    main_channels = fig.UserData.main_channels;
+
+    % Pad all labels and prefix with 🟣 if a main channel is involved
+    maxlen = max(cellfun(@length, all_labels));
+    label_display = cell(size(all_labels));
+    for i = 1:numel(all_labels)
+        lbl = all_labels{i};
+        parts = split(lbl, '-');
+        if any(ismember(parts, main_channels))
+            prefix = '🟣 ';
+        else
+            prefix = '   ';  % padding for alignment
+        end
+        label_display{i} = [prefix, sprintf('%-*s', maxlen, lbl)];
+    end
+
+    % Top info text: number of IEDs marked
+    marked_count = sum(fig.UserData.was_adjusted);
+    uicontrol(d, 'Style', 'text', ...
+              'String', sprintf('IEDs marked so far: %d', marked_count), ...
+              'ForegroundColor', [0 .5 0], ...
+              'FontWeight', 'bold', ...
+              'FontSize', 12, ...
+              'HorizontalAlignment', 'left', ...
+              'Position', [20 360 300 20]);
+
+    % Label for instructions
+    uicontrol(d, 'Style', 'text', ...
+              'String', 'Select a bipolar channel to use for IED timing:', ...
+              'FontSize', 11, ...
+              'HorizontalAlignment', 'left', ...
+              'Position', [20 335 300 20]);
+
+    % Listbox with padded labels
+    lb = uicontrol(d, 'Style', 'listbox', ...
+                   'String', label_display, ...
+                   'Position', [20 80 300 250], ...
                    'FontSize', 11, ...
+                   'FontName', 'Courier New', ...  % <-- monospaced font
                    'Tag', 'channel_listbox');
 
-    % Label
-    uicontrol('Style', 'text', ...
-              'String', 'Select a bipolar channel to use for IED timing:', ...
-              'Position', [20 320 260 20], ...
-              'FontSize', 11, ...
-              'HorizontalAlignment', 'left');
-
-    % Confirm button
-    uicontrol('Style', 'pushbutton', ...
+    % OK button
+    uicontrol(d, 'Style', 'pushbutton', ...
               'String', 'OK', ...
-              'Position', [110 20 80 30], ...
+              'Position', [135 30 80 30], ...
               'Callback', @(btn, ~) confirm_channel_selection(fig, d, lb));
 end
 
 %%
 function confirm_channel_selection(fig, dialogFig, lb)
     selected_idx = lb.Value;
-    selected_name = lb.String{selected_idx};
+    % Strip formatting like '🟣 ' or whitespace
+    raw_label = lb.String{selected_idx};
+    selected_name = strtrim(erase(raw_label, '🟣'));  % Keep only plain channel name
 
     if isempty(selected_name)
         msgbox('Please select a channel before confirming.', 'No Selection', 'error');
@@ -693,6 +725,7 @@ function confirm_channel_selection(fig, dialogFig, lb)
     % Save selected channel to UserData
     fig.UserData.selected_channel_name = selected_name;
     fig.UserData.selected_channel_idx = idx;
+    
     % Optional: try to highlight selected channel if it's visible
     page = fig.UserData.currentPage;
     perPage = fig.UserData.tracesPerPage;
@@ -720,7 +753,15 @@ function clear_current_ied(fig)
     end
 
     idx = fig.UserData.currentIED;
-    fig.UserData.confirmed_peak_times(idx) = NaN;
+    fig.UserData.confirmed_peak_times(idx) = NaN; % Clear the saved time
+
+    % Clear the adjustment flag
+    if isfield(fig.UserData, 'was_adjusted')
+        fig.UserData.was_adjusted(idx) = false;
+    end
+
+    % Update the plot to reflect the cleared red line and adjustment count
+    update_plot(fig);
 
     uialert(fig, sprintf('Removed saved time for IED %d.', idx), ...
         'Cleared', 'Icon', 'info');
@@ -728,22 +769,47 @@ end
 
 %%
 function update_subject_info_label(fig)
-    if ~isfield(fig.UserData, 'was_adjusted')
-        total_adjusted = 0;
-    else
+    % Initialize default values
+    total_adjusted = 0;
+    is_marked = false;
+    channel_note = '';
+
+    % Determine if current IED has been adjusted
+    if isfield(fig.UserData, 'was_adjusted')
         total_adjusted = sum(fig.UserData.was_adjusted);
+        curr_idx = fig.UserData.currentIED;
+        if curr_idx <= numel(fig.UserData.was_adjusted)
+            is_marked = fig.UserData.was_adjusted(curr_idx);
+        end
     end
 
+    % Mark status string
+    if is_marked
+        mark_status = '✔ Marked';
+    else
+        mark_status = '✘ Unmarked';
+    end
+
+    % Show selected channel and number of marked IEDs
+    if isfield(fig.UserData, 'selected_channel_name') && ~isempty(fig.UserData.selected_channel_name)
+        sel_channel = fig.UserData.selected_channel_name;
+        marked_in_channel = sum(fig.UserData.was_adjusted);  % assumes only one channel used
+        channel_note = sprintf(' | Channel: %s | Marked in channel: %d', ...
+            sel_channel, marked_in_channel);
+    end
+
+    % Final label string
     fig.UserData.subjectInfoLabel.Text = ...
-        sprintf('Subject: %s | Run: %s | IED Type: %s (%d of %d) | Adjusted: %d', ...
+        sprintf('Subject: %s | Run: %s | IED Type: %s (%d of %d) | Adjusted: %d | %s%s', ...
         fig.UserData.subject_id, ...
         fig.UserData.run_id, ...
         fig.UserData.ied_id, ...
         fig.UserData.currentIED, ...
         fig.UserData.totalIEDs, ...
-        total_adjusted);
+        total_adjusted, ...
+        mark_status, ...
+        channel_note);
 end
-
 
 %%
 function [eeg_data, sampling_rate, channel_labels, ch_name_to_index] = load_eeg_bin_with_labels(eeg_bin_path)

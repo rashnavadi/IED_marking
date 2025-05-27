@@ -600,7 +600,7 @@ function save_all_confirmed_peaks(fig)
         if isnan(fig.UserData.confirmed_peak_times(i))
             fprintf(fid, 'skipped by user\n');
         else
-            fprintf(fid, '%.6f\n', adjusted_peak_times(i));
+            fprintf(fid, '%.2f\n', adjusted_peak_times(i));
         end
     end
 

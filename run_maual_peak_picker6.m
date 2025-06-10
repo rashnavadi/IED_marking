@@ -336,23 +336,28 @@ end
 function update_plot(fig)
     eeg = fig.UserData.eeg_data;
     fs = fig.UserData.fs;
-    ied_samples = fig.UserData.original_ied_samples;
-    t = (-0.5 : 1/fs : 0.5);  % 1 second window
+    pre_samples = round(0.5 * fs);
+    post_samples = round(0.5 * fs);
+    t = (-pre_samples : post_samples) / fs;  % x-axis
     win_samples = (length(t) - 1) / 2;
     
     % Use the currently selected IED
     ied_idx = fig.UserData.currentIED;
 
-    if ~isnan(fig.UserData.confirmed_peak_times(ied_idx))
-        % Use manually adjusted absolute time (convert to sample index)
-        center = round(fig.UserData.confirmed_peak_times(ied_idx) * fs);
-    else
-        % Use original IED center in sample index
-        center = fig.UserData.original_ied_samples(ied_idx);
-    end
+    % Original center based on the IED index
+    center = fig.UserData.original_ied_samples(ied_idx); % Always center around original IED
 
-    if center - win_samples < 1 || center + win_samples > size(eeg, 2)
-        disp('[⚠] First IED is out of bounds.');
+    % Now enforce boundary limits to avoid plotting errors
+    pre_samples = round(0.5 * fs);
+    post_samples = round(0.5 * fs);
+    n_samples = size(fig.UserData.eeg_data, 2);
+
+    % Shift center back to stay in bounds
+    center = max(center, pre_samples + 1);
+    center = min(center, n_samples - post_samples);
+
+    if center - pre_samples < 1 || center + post_samples > n_samples
+        disp('[⚠] Skipping IED: index out of bounds after centering.');
         return;
     end
 
@@ -391,8 +396,15 @@ function update_plot(fig)
 
         idx1 = ch_map(ch1);
         idx2 = ch_map(ch2);
-        trace = eeg(idx1, center - win_samples : center + win_samples) - ...
-            eeg(idx2, center - win_samples : center + win_samples);
+        start_idx = center - pre_samples;
+        end_idx   = center + post_samples;
+
+        % ✅ Add a bounds check
+        if start_idx < 1 || end_idx > size(eeg, 2)
+            warning('[⚠] Skipping IED %d: index out of bounds.', ied_idx);
+            continue;
+        end
+        trace = eeg(idx1, start_idx:end_idx) - eeg(idx2, start_idx:end_idx);
 
         ax = axesHandles(plotIdx);
         main_chs = fig.UserData.main_channels;
@@ -411,6 +423,7 @@ function update_plot(fig)
         end
 
         plot(ax, t, trace, 'Color', trace_color, 'LineWidth', 1.5);
+        xlim(ax, [t(1), t(end)]);  % <-- Ensures consistent x-axis across IEDs
         title(ax, sprintf('%s (IED %d of %d)', label, ied_idx, fig.UserData.totalIEDs));
         xlabel(ax, 'Time (s)');
         ylabel(ax, 'Amplitude');
@@ -427,16 +440,15 @@ function update_plot(fig)
 
     if isnan(peak_time)
         if isfield(fig.UserData, 'selected_channel_name') && ~isempty(fig.UserData.selected_channel_name)
-            % Show purple bar at time = 0 for unmarked IEDs after channel selected
-            fig.UserData.peakLineTime = 0;
             x_init = 0;
         else
             x_init = [];  % No channel selected → no line
         end
     else
-        x_init = peak_time - fig.UserData.original_ied_times_sec(ied_idx);  % relative to IED center
-    end
+        % Ensure peak time is shown relative to original center
+        x_init = fig.UserData.confirmed_peak_times(ied_idx) - fig.UserData.original_ied_times_sec(ied_idx);
 
+    end
 
     line_handle = gobjects(numel(fig.UserData.axesList), 1);
 
@@ -551,8 +563,7 @@ function save_peak_time(fig)
     end
 
    % ✅ Save corrected time
-%     abs_time = fig.UserData.original_ied_times_sec(ied_idx) + rel_time;
-    fig.UserData.confirmed_peak_times(ied_idx) = rel_time;
+    fig.UserData.confirmed_peak_times(ied_idx) = fig.UserData.original_ied_times_sec(ied_idx) + rel_time;
     disp(['confirmed_peak_times(' num2str(ied_idx) ') = ', num2str(fig.UserData.confirmed_peak_times(ied_idx))]);
 
 
@@ -598,7 +609,7 @@ function save_all_confirmed_peaks(fig)
     end
 
     % Compute absolute peak times
-    adjusted_peak_times = original + confirmed;
+    adjusted_peak_times = confirmed;
 
     % Warn if any NaNs still exist (unconfirmed IEDs)
     unconfirmed = isnan(adjusted_peak_times);
@@ -644,6 +655,10 @@ function save_all_confirmed_peaks(fig)
             fprintf(fid, '%d\tskipped by user\n', i);  % ✅ 1-based index
         else
             fprintf(fid, '%d\t%.2f\n', i, adjusted_peak_times(i));  % ✅ 1-based index and time
+            % ✅ Add debug print here:
+            fprintf('confirmed_peak_times(%d) = %.5f (absolute time = %.5f sec)\n', ...
+                i, fig.UserData.confirmed_peak_times(i), ...
+                fig.UserData.original_ied_times_sec(i) + fig.UserData.confirmed_peak_times(i));
         end
     end
 
@@ -744,7 +759,7 @@ function load_saved_peaks(fig)
     end
 
     % === Initialize output ===
-    peak_times = nan(size(fig.UserData.original_ied_times_sec));
+    peak_times = nan(size(fig.UserData.original_ied_times_sec)); % peak_times = confirmed_times
     for i = 1:length(lines)
         line = strtrim(lines{i});
         if startsWith(line, '#') || isempty(line)
@@ -764,7 +779,7 @@ function load_saved_peaks(fig)
 
         time_val = str2double(val);
         if ~isnan(idx) && ~isnan(time_val) && idx >= 1 && idx <= numel(peak_times)
-            peak_times(idx) = time_val;  % is already relative time
+            peak_times(idx) = time_val;  % ✅ already absolute time from manual.txt
         end
     end
 

@@ -295,6 +295,8 @@ function select_ied_file(fig)
     % Reset to page 1 and trigger the first update
     fig.UserData.currentPage = 1;
     fig.UserData.totalIEDs = length(fig.UserData.original_ied_samples);
+    fig.UserData.selected_channel_name = '';  % Clear selected marking channel
+    fig.UserData.selected_channel_idx = [];   % Clear index
 
     % Step 6: Update identifiers
     fig.UserData.subject_id = txt_subject;
@@ -380,6 +382,10 @@ function update_plot(fig)
     for ax = axesHandles
         cla(ax);
         ax.Title.String = '';
+        ax.Color = 'white';  % ✅ Reset background to white
+        ax.XColor = 'black'; % Optional: reset tick color
+        ax.YColor = 'black';
+        ax.LineWidth = 0.5;  % Optional: reset line thickness
     end
 
     % Plot only channels for current page
@@ -407,12 +413,17 @@ function update_plot(fig)
         trace = eeg(idx1, start_idx:end_idx) - eeg(idx2, start_idx:end_idx);
 
         ax = axesHandles(plotIdx);
+        ax.Color = 'white';  % Reset background to white by default
         main_chs = fig.UserData.main_channels;
+        
         if any(strcmp(ch1, main_chs)) || any(strcmp(ch2, main_chs))
-            trace_color = [1 0 1];  % Magenta: [R G B]
+            trace_color = [1 0 1];          % Magenta line for main channel
+            ax.Color = [0.9 1 0.9];         % Light green background for main channel
         else
-            trace_color = [0 0 0.3];  % Dark blue for others
+            trace_color = [0 0 0.3];        % Dark blue line for others
+            ax.Color = 'white';            % Ensure background is reset
         end
+
 
         if ~isfield(fig.UserData, 'highlightLabel') || ~isvalid(fig.UserData.highlightLabel)
             fig.UserData.highlightLabel = uilabel(fig.UserData.plotPanel, ...
@@ -566,11 +577,8 @@ function save_peak_time(fig)
     fig.UserData.confirmed_peak_times(ied_idx) = fig.UserData.original_ied_times_sec(ied_idx) + rel_time;
     disp(['confirmed_peak_times(' num2str(ied_idx) ') = ', num2str(fig.UserData.confirmed_peak_times(ied_idx))]);
 
-
-    % If it's the first time, mark it as adjusted
-    if ~already_saved
-        fig.UserData.was_adjusted(ied_idx) = true;
-    end
+    % Always mark as adjusted (first time or overwrite)
+    fig.UserData.was_adjusted(ied_idx) = true;
 
     % ✅ Count total adjusted
     total_adjusted = sum(fig.UserData.was_adjusted);
@@ -936,9 +944,6 @@ function confirm_channel_selection(fig, dialogFig, lb)
     fprintf('Selected channel for IED marking: %s (index %d)\n', selected_name, idx);
 
     close(dialogFig);
-
-%     % === Force initial purple line (purely visual)
-%     ied_idx = fig.UserData.currentIED;
 
     % Only position the visual line; DO NOT write to confirmed_peak_times
     fig.UserData.peakLineTime = 0;  % default: center at 0s relative

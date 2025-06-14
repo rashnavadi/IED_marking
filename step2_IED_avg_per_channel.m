@@ -3,8 +3,14 @@
 %% Launch first GUI to manually find the peak in the main channel
 % By Tahere Rashnavadi
 % Last update: June 11, 2025
+% NOTES:
+%== 
+% by adjusted IED times i mean original IED times, they were named adjusted because the original timings marked by the epileptologists were
+%done wrt the fMRI runs, but then i adjusted them wrt the continous iEEG time/run
+%== 
+% manual IED times: are the output IED timings obtained from the first GUI and refer to the ~25 IEDs that have been marked by the user
 
-%%
+%% function 1
 function manual_ied_loader_gui()
     % === NEW: Get screen size and center the GUI ===
     screenSize = get(0, 'ScreenSize');  % [left bottom width height]
@@ -36,21 +42,21 @@ function manual_ied_loader_gui()
     eegButton = uibutton(leftLayout, 'Text', 'Select EEG .bin File', ...
         'ButtonPushedFcn', @(btn,event) select_eeg_file(fig));
 
-    % IED file selection button
+    % manaul IED file selection button (output file from the previous GUI)
     iedButton = uibutton(leftLayout, 'Text', 'Select IED Manual Timings .txt File', ...
-        'ButtonPushedFcn', @(btn,event) select_ied_file(fig));
-    
+        'ButtonPushedFcn', @(btn,event) select_manual_ied_file(fig));
+
+    % Select Original Adjusted IED File (all IEDs) marked by epileptologists
+    selectAdjustedIEDBtn = uibutton(leftLayout, ...
+        'Text', 'Select Adjusted IEDs .txt File', ...
+        'ButtonPushedFcn', @(btn,event) load_adjusted_ieds_file(fig));
+   
     % Page buttons for EEG channels: Next and Previous buttons in leftLayout
     nextButton = uibutton(leftLayout, 'Text', 'Next EEG Channel ➤', ...
         'ButtonPushedFcn', @(btn, event) go_to_next_page(fig));
 
     prevButton = uibutton(leftLayout, 'Text', '◀ Prev. EEG Channel', ...
         'ButtonPushedFcn', @(btn, event) go_to_previous_page(fig));
-
-    % Compute IED Average Template
-    avgButton = uibutton(leftLayout, ...
-    'Text', 'Compute Avg IED Template (25 IEDs)', ...
-    'ButtonPushedFcn', @(btn,event) compute_avg_template(fig));
 
     % Button: Align All IEDs Using Template
     alignAllButton = uibutton(leftLayout, ...
@@ -119,7 +125,7 @@ function manual_ied_loader_gui()
         'HorizontalAlignment', 'left', ...
         'Position', [300 figHeight - 65 figWidth - 320 30]);  % <-- Moved right, trimmed left margin
 
-    fig.UserData.adjustedIEDTimes = [];  % From manual .txt file
+    fig.UserData.manualIEDTimes = [];  % From manual .txt file
 
     main_map = load('main_channels_map.mat', 'main_channels_map');
     fig.UserData.main_channels_map = main_map.main_channels_map;
@@ -127,7 +133,7 @@ function manual_ied_loader_gui()
 
 end
 
-%%
+%% function 2
 function select_eeg_file(fig)
     
     % Step 1: Prompt user to select the EEG binary file
@@ -174,9 +180,6 @@ function select_eeg_file(fig)
 
     full_log_path = fullfile(bin_path, txt_file);
     fprintf('[✔] Automatically loaded processing log: %s\n', full_log_path);
-
-
-    fprintf('[ℹ] Loading channel info from: %s\n', full_log_path);
 
     % Step 3: Read file line-by-line, Extract sampling rate, number of channels, and labels
     fid = fopen(full_log_path, 'r');
@@ -244,10 +247,10 @@ function select_eeg_file(fig)
     disp(['Extracted ', num2str(numel(bipolar_labels)), ' bipolar traces. Sampling Rate: ', num2str(s_Rate), ' Hz']);
 end
 
-%%
-function select_ied_file(fig)
+%% function 3
+function select_manual_ied_file(fig)
 
-    disp('Please select the manually adjusted IED timing file (.txt)');
+    disp('Please select the manual IED timing file (.txt)');
 
     % Step 1: Let user select .txt file
     [ied_file, ied_path] = uigetfile('*_manual.txt', 'Select manual IED timing file');
@@ -300,7 +303,7 @@ function select_ied_file(fig)
         end
     end
 
-    % Step 3: Read times, skip non-numeric lines ("skipped by user")
+    % Step 3: Read all lines (incl. "skipped by user")
     fid = fopen(ied_txt_path, 'r');
     lines = {};
     marking_channel = 'Unknown';
@@ -311,15 +314,14 @@ function select_ied_file(fig)
         line_num = line_num + 1;
 
         if line_num == 1 && contains(line, 'Channel used for IED timing adjustment')
-            % Extract channel from line like: "# Channel used for IED timing adjustment: dLpIN1-dLpIN2"
             tokens = regexp(line, 'adjustment:\s*(\S+)', 'tokens');
             if ~isempty(tokens)
                 marking_channel = tokens{1}{1};
             end
-            continue;  % Skip first line from IED times
+            continue;  % Skip channel header
         end
 
-        if ~startsWith(line, '#') && ~contains(lower(line), 'skipped') && ~isempty(line)
+        if ~startsWith(line, '#') && ~isempty(line)
             lines{end+1} = line; %#ok<AGROW>
         end
     end
@@ -330,21 +332,38 @@ function select_ied_file(fig)
     fig.UserData.markingChannelLabel.Text = sprintf('📍 Marked in: %s', marking_channel);
 
     % Convert to numeric
-    manual_ied_times = [];
-    for i = 1:numel(lines)
-        parts = str2num(lines{i});  %#ok<ST2NM>
-        if numel(parts) >= 2
-            manual_ied_times(end+1,1) = parts(2);  % Keep only the second column (IED time)
+    n_ieds = numel(lines);
+    manual_ied_times = nan(n_ieds, 1);  % NaN for skipped
+    skip_flags = false(n_ieds, 1);      % true for skipped
+
+    for i = 1:n_ieds
+        txt = strtrim(lines{i});
+        if contains(lower(txt), 'skipped')
+            skip_flags(i) = true;
+        else
+            nums = sscanf(txt, '%f');  % Extract all numeric values in line
+            if numel(nums) >= 2
+                manual_ied_times(i) = nums(2);  % Use the second number (actual IED time)
+            elseif numel(nums) == 1
+                manual_ied_times(i) = nums(1);  % If only one number (no line index), use it
+            else
+                fprintf('[⚠️] Line %d could not be parsed as number: "%s"\n', i, txt);
+            end
         end
     end
 
-    if isempty(manual_ied_times)
-        uialert(fig, '❌ No valid IED timings found in the file.', 'Empty File');
+    fprintf('[DEBUG] Parsed %d valid IED times, %d skipped.\n', ...
+        sum(~isnan(manual_ied_times)), sum(isnan(manual_ied_times)));
+
+    % Validate we have at least 1 non-skipped
+    if all(skip_flags)
+        uialert(fig, '❌ All IEDs marked as skipped. Cannot proceed.', 'Empty File');
         return;
     end
 
     % Step 4: Save to UserData
-    fig.UserData.adjustedIEDTimes = manual_ied_times(:);  % column vector
+    fig.UserData.manualIEDTimes = manual_ied_times(:);  % NaNs for skipped
+    fig.UserData.manualSkipFlags = skip_flags(:);
     fig.UserData.manualIED_samples = round(manual_ied_times * fig.UserData.fs);
 
     % to avoid cross-subject contamination:
@@ -416,7 +435,7 @@ function select_ied_file(fig)
     fprintf('[✔] Loaded %d valid IED timings from: %s\n', length(manual_ied_times), ied_file);
 
     % Step 9: Auto-compute average IED template and plot
-    if length(fig.UserData.adjustedIEDTimes) >= 1
+    if length(fig.UserData.manualIEDTimes) >= 1
         compute_avg_template(fig);
         % plot_avg_template is already called inside compute_avg_template
     end
@@ -438,87 +457,212 @@ function select_ied_file(fig)
         fprintf('[ℹ️] No saved onset/peak file found. Starting fresh.\n');
     end
 
+    % === Set output_dir for saving aligned results like final aligned IEDs ===
+    subject_dir = fileparts(parent_dir);  % go up from IED_Cleaned to subject folder
+    output_dir = fullfile(subject_dir, 'avg_onset_peak_times');
+    if ~exist(output_dir, 'dir')
+        mkdir(output_dir);
+    end
+    fig.UserData.output_dir = output_dir;
+    fprintf('[📁] Output directory set to: %s\n', output_dir);
+
 end
-%%
+
+%% function 4
+% load_adjusted_ieds_file this is the original/adjusted IED timings 
+function load_adjusted_ieds_file(fig)
+
+    [fname, fpath] = uigetfile('*_adjusted.txt', 'Select adjusted IED timing file (all detections)');
+    if isequal(fname, 0)
+        return;
+    end
+
+    full_path = fullfile(fpath, fname);
+
+    % Step 1: Extract subject, run, and IED type from filename
+    [~, basename, ~] = fileparts(fname);
+    tokens = regexp(basename, '(ICE\d+)_([a-zA-Z0-9]+)_([a-zA-Z0-9]+)_adjusted', 'tokens');
+
+    if isempty(tokens)
+        uialert(fig, 'Filename does not match expected format: ICE###_RunX_IEDY_adjusted.txt', 'Invalid Format');
+        return;
+    end
+
+    tokens = tokens{1};
+    adj_subject = tokens{1};
+    adj_run     = tokens{2};
+    adj_ied     = tokens{3};
+
+    % Step 2: If manual file was already loaded, check match
+    if isfield(fig.UserData, 'subject_id')
+        man_subject = fig.UserData.subject_id;
+        man_run     = fig.UserData.run_id;
+        man_ied     = fig.UserData.ied_id;
+
+        if ~strcmp(man_subject, adj_subject) || ...
+           ~strcmp(man_run, adj_run) || ...
+           ~strcmp(man_ied, adj_ied)
+
+            msg = sprintf(['❌ Subject/run/IED mismatch:\n\n' ...
+                'Manual file:   %s %s %s\nAdjusted file: %s %s %s\n\n' ...
+                'Please load matching adjusted file.'], ...
+                man_subject, man_run, man_ied, ...
+                adj_subject, adj_run, adj_ied);
+            uialert(fig, msg, 'File Mismatch');
+            return;
+        end
+    else
+        % If manual file not loaded yet, store metadata from adjusted file
+        fig.UserData.subject_id = adj_subject;
+        fig.UserData.run_id     = adj_run;
+        fig.UserData.ied_id     = adj_ied;
+    end
+
+    % Step 3: Load adjusted IED times
+    all_ied_times = load(full_path);
+    fig.UserData.adjustedIEDTimes = all_ied_times(:);
+
+    fprintf('[📥] Loaded %d IED times from adjusted file: %s\n', ...
+        length(all_ied_times), fname);
+end
+
+%% function 5
+% compute the average IED template over the 25 manually marked IEDs
+% only use the main channel (the one noted in the first line of the manual IED .txt file) to compute the average template
+% this func gives single-channel template for aligning IEDs across all channels
+
 function compute_avg_template(fig)
-    % Parameters
+    % Compute average IED template only from the manually marked main channel
     fs = fig.UserData.fs;
     eeg = fig.UserData.eeg_data;
-    adjusted_times_sec = fig.UserData.adjustedIEDTimes;
+    manual_IED_times_sec = fig.UserData.manualIEDTimes;
+
+    % === Step 1: Filter valid IEDs ===
+    % 🧠 Filter out "skipped by user" entries (NaNs)
+    valid_idx = ~isnan(manual_IED_times_sec);
+    manual_IED_times_sec = manual_IED_times_sec(valid_idx);  % Keep only valid manual IEDs
+    fprintf('[DEBUG] Using %d of %d manual IEDs (non-skipped).\n', ...
+        numel(manual_IED_times_sec), numel(fig.UserData.manualIEDTimes));
+
+    if isempty(manual_IED_times_sec)
+        error('No valid IEDs found to compute average template.');
+    end
+
+    % === Step 2: Parse main channel ===
+    % Get the marking channel used (from first line of manual file)
+    target_label = strtrim(fig.UserData.marking_channel_used);    
     channelnames = fig.UserData.channelnames_bipolar;
     mono_map = containers.Map(fig.UserData.channelnames_mono, 1:numel(fig.UserData.channelnames_mono));
 
+    % Validate marking channel exists
+    ch_idx = find(strcmp(channelnames, target_label), 1);
+    if isempty(ch_idx)
+        error('Main marking channel (%s) not found in channel list.', target_label);
+    end
+
+    % Get mono indices for that channel
+    parts = split(target_label, '-');
+    ch1 = parts{1}; ch2 = parts{2};
+
+    if ~isKey(mono_map, ch1) || ~isKey(mono_map, ch2)
+        error('Main marking channel parts (%s, %s) not found in mono map.', ch1, ch2);
+    end
+    idx1 = mono_map(ch1);
+    idx2 = mono_map(ch2);
+
+    % === Step 3: Segment extraction parameters ===
     pre_samples = round(0.5 * fs);
     post_samples = round(0.5 * fs);
     win_len = pre_samples + post_samples + 1;
-    n_channels = numel(channelnames);
-    n_ieds = numel(adjusted_times_sec);
-    
-    % Initialize output
-    avg_template = zeros(n_channels, win_len);
-    valid_count = zeros(n_channels, 1);  % Track how many IEDs contribute to each channel
-
+    n_ieds = numel(manual_IED_times_sec);
     % Convert adjusted times to sample indices
-    sample_times = round(adjusted_times_sec * fs);
+    sample_times = round(manual_IED_times_sec * fs);
 
-    for ch = 1:n_channels
-        label = channelnames{ch};
-        parts = split(label, '-');
-        ch1 = parts{1}; ch2 = parts{2};
+    % === Step 4: Collect segments and compute average ===
+    % Extract IED segments for that channel
+    segments = zeros(n_ieds, win_len);
+    count = 0;
+    for i = 1:n_ieds
+        center = sample_times(i);
+        start_idx = center - pre_samples;
+        end_idx   = center + post_samples;
 
-        % Skip if channels not found
-        if ~isKey(mono_map, ch1) || ~isKey(mono_map, ch2)
+        if start_idx < 1 || end_idx > size(eeg, 2)
+            fprintf('[SKIP] IED %d: window [%d–%d] is out of bounds.\n', i, start_idx, end_idx);
             continue;
         end
-        idx1 = mono_map(ch1);
-        idx2 = mono_map(ch2);
-
-        segments = zeros(n_ieds, win_len);
-        count = 0;
-
-        for i = 1:n_ieds
-            center = sample_times(i);
-
-            start_idx = center - pre_samples;
-            end_idx   = center + post_samples;
-
-            if start_idx < 1 || end_idx > size(eeg, 2)
-                continue;  % Skip if out of bounds
-            end
-
-            segment = eeg(idx1, start_idx:end_idx) - eeg(idx2, start_idx:end_idx);
-            count = count + 1;
-            segments(count, :) = segment;
-        end
-
-        if count > 0
-            avg_template(ch, :) = mean(segments(1:count, :), 1);
-            valid_count(ch) = count;
-        end
+        segments(count + 1, :) = eeg(idx1, start_idx:end_idx) - eeg(idx2, start_idx:end_idx);
+        count = count + 1;
     end
 
+    if count == 0
+        error('No valid IED segments extracted for averaging.');
+    end
+
+    avg_template = mean(segments(1:count, :), 1);
     fig.UserData.avgTemplate25 = avg_template;
-    fprintf('[✔] Avg template computed using %d manually marked IEDs per channel.\n', n_ieds);
+    fprintf('[✔] Avg template computed from %d IEDs on channel %s.\n', count, target_label);
 
-    % Optional: show how many IEDs contributed per channel
-%     disp('Valid IED counts per channel (non-zero only):');
-%     disp(find(valid_count > 0));
+    % === Step 5: Plot the averagtemplat overe 25 IEDs in a separate figure ===
+    t = (-pre_samples:post_samples) / fs;
+    fig_avg = figure('Name', 'Avg IED Template', 'Color', 'w');
+    plot(t, avg_template, 'k', 'LineWidth', 1.5);
+    xlabel('Time (s)');
+    ylabel('Amplitude');
+    title(sprintf('Avg IED Template | Subject: %s | Run: %s | IED: %s | Channel: %s', ...
+        fig.UserData.subject_id, fig.UserData.run_id, fig.UserData.ied_id, target_label), ...
+        'Interpreter', 'none');
+    grid on;
+    xlim([-0.5, 0.5]);
 
-    % Plot
-    plot_avg_template(fig, 'avgTemplate25');
+    % === Step 6: Save figure and raw data ===
+    [ied_folder, ~, ~] = fileparts(fig.UserData.ied_txt_path);
+    [parent_dir, ~, ~] = fileparts(ied_folder);
+    save_dir = fullfile(parent_dir, 'avg_onset_peak_times');
+    if ~exist(save_dir, 'dir'), mkdir(save_dir); end
+
+    base = sprintf('%s_%s_%s', ...
+        fig.UserData.subject_id, fig.UserData.run_id, fig.UserData.ied_id);
+
+    saveas(fig_avg, fullfile(save_dir, [base '_avg_template25.png']));
+    save(fullfile(save_dir, [base '_avg_template25.mat']), 'avg_template', 't');
+
+    % Inform user
+    msg = sprintf(['✅ The average IED template was successfully computed from %d manually marked IEDs on channel %s.\n\n' ...
+        'The figure and data have been saved to:\n\n%s'], ...
+        count, target_label, save_dir);
+
+    uialert(fig, msg, 'Avg Template Saved');
 end
 
-%%
+
+%% function 6
 function plot_avg_template(fig, template_key)
     % template_key: 'avgTemplate25' or 'finalAvgTemplate'
-    
+
     if ~isfield(fig.UserData, template_key) || isempty(fig.UserData.(template_key))
         uialert(fig, 'Template not found. Compute it first.', 'Missing Template');
         return;
     end
 
-    avg_data = fig.UserData.(template_key);  % [nChannels x nTimePoints]
+    avg_data = fig.UserData.(template_key);  % [nChannels x nTimePoints] OR [1 x T]
     fs = fig.UserData.fs;
+
+    % DEBUG info
+    fprintf('[DEBUG] Plotting template: %s | Size: [%d x %d]\n', ...
+        template_key, size(avg_data, 1), size(avg_data, 2));
+
+    % If this is avgTemplate25 and it's only 1 row, force it to show only for main channel
+    if strcmp(template_key, 'avgTemplate25') && size(avg_data, 1) == 1
+        main_label = strtrim(fig.UserData.marking_channel_used);
+        main_ch_idx = find(strcmp(fig.UserData.channelnames_bipolar, main_label));
+        full_data = nan(length(fig.UserData.channelnames_bipolar), size(avg_data, 2));
+        if ~isempty(main_ch_idx)
+            full_data(main_ch_idx, :) = avg_data;
+        end
+        avg_data = full_data;
+    end
+
     nChannels = size(avg_data, 1);
     nTime = size(avg_data, 2);
     t = linspace(-0.5, 0.5, nTime);  % assuming ±0.5s window
@@ -542,36 +686,44 @@ function plot_avg_template(fig, template_key)
         ax.LineWidth = 0.5;
     end
 
+    % PLOTTING ==== Compute global safe Y-limit based on all visible channels ====
+    visible_traces = avg_data(visibleIdx, :);
+    global_min = min(visible_traces(:));
+    global_max = max(visible_traces(:));
+    yrange = global_max - global_min;
+    pad = 0.1 * yrange;
+    global_ylim = [global_min - pad, global_max + pad];
+    
     % Plot traces
     for i = 1:length(axesHandles)
         ax = axesHandles(i);
-        if i <= length(visibleIdx)
+        if i <= length(visibleIdx) && visibleIdx(i) <= size(avg_data, 1)
             chIdx = visibleIdx(i);
+            fprintf('[PLOT] Plotting channel %d (%s)...\n', chIdx, fig.UserData.channelnames_bipolar{chIdx});
             trace = avg_data(chIdx, :);
+            % Use shared Y-limits for consistency across all subplots
+            safe_ylim = global_ylim;
+
             ch_name = fig.UserData.channelnames_bipolar{chIdx};
 
-            % Handle missing or malformed channel names
-            if contains(ch_name, '-')
-                parts = split(ch_name, '-');
-            else
-                parts = {ch_name, ''};
-            end
-            ch1 = parts{1}; ch2 = parts{2};
-            main_chs = fig.UserData.main_channels;
+            % Get marking channel label from manual file
+            main_label = strtrim(fig.UserData.marking_channel_used);  % e.g., 'dRaIN3-dRaIN5'
+            is_main_channel = strcmp(ch_name, main_label);
 
-            % Styling
-            if any(strcmp(ch1, main_chs)) || any(strcmp(ch2, main_chs))
-                trace_color = [1 0 1];          % magenta
-                ax.Color = [0.9 1 0.9];         % light green
+            % Styling: highlight only the marking channel
+            if is_main_channel
+                trace_color = [0 0 0];          % black for main template
+                ax.Color = [0.9 1.0 0.9];       % light green background
             else
-                trace_color = [0 0 0.3];        % dark blue
+                trace_color = [0.7 0.7 0.7];    % gray placeholder
                 ax.Color = 'white';
             end
 
             % Plot
-            if all(isnan(trace))
-                continue;
+            if all(isnan(trace)) || isempty(trace)
+                trace = zeros(size(t));
             end
+
             % Plot the trace
             lineHandle = plot(ax, t, trace, 'Color', trace_color, 'LineWidth', 1.5);
 
@@ -592,6 +744,7 @@ function plot_avg_template(fig, template_key)
             ax.PickableParts = 'all';
 
             xlim(ax, [t(1), t(end)]);
+            ylim(ax, safe_ylim);  % <-- ensures consistent scaling even for plotted traces
             title(ax, sprintf('%s (ch %d of %d)', ch_name, chIdx, nChannels));
             xlabel(ax, 'Time (s)');
             ylabel(ax, 'Amplitude');
@@ -599,8 +752,12 @@ function plot_avg_template(fig, template_key)
         else
             % Clear unused axes
             cla(ax);
-            ax.Title.String = '';
-            ax.ButtonDownFcn = [];
+            ax.Title.String = sprintf('Channel %d (empty)', i);
+            ax.XLim = [t(1), t(end)];
+            ax.YLim = safe_ylim;
+            xlabel(ax, 'Time (s)');
+            ylabel(ax, 'Amplitude');
+            ax.Color = 'white';
         end
     end
 
@@ -615,7 +772,8 @@ function plot_avg_template(fig, template_key)
     end
 end
 
-%% To make all IEDs consistently aligned in time (per channel) before averaging
+%% function 7 
+% To make all IEDs consistently aligned in time (per channel) before averaging
 % input: - avgTemplate25 (template), - Original IED times
 % ouptu: templateAlignedTimes → [nIEDs × nChannels] of refined sample indices
 % Aim: To make all IEDs consistently aligned in time (per channel) before averaging
@@ -635,21 +793,28 @@ function align_all_ieds(fig)
         fs = fig.UserData.fs;
         eeg = fig.UserData.eeg_data;
         avg_template = fig.UserData.avgTemplate25;
-        adjusted_times_sec = fig.UserData.adjustedIEDTimes;
+        manual_times = fig.UserData.manualIEDTimes;     % 25 manually marked IEDs
+        adjusted_times = fig.UserData.adjustedIEDTimes; % all detected IEDs (uploaded via second button)
+
+        % Combine both sets of IEDs, avoiding duplicates
+        skip_flags = fig.UserData.manualSkipFlags;
+
+        if length(manual_times) ~= length(adjusted_times)
+            error('Manual and adjusted IED timing files must have the same number of entries.');
+        end
+
         channelnames = fig.UserData.channelnames_bipolar;
         mono_map = containers.Map(fig.UserData.channelnames_mono, 1:numel(fig.UserData.channelnames_mono));
     
         % Parameters
-        n_ieds = numel(adjusted_times_sec);
+        n_ieds = numel(fig.UserData.adjustedIEDTimes);  % ✅ adjusted/orig IED file 
         n_channels = numel(channelnames);
         template_len = size(avg_template, 2);
+        aligned_times = nan(n_ieds, n_channels);  % Output matrix
     
-        pre_samples = round(0.5 * fs);
-        post_samples = round(0.5 * fs);
-        search_margin = round(0.2 * fs);  % search ±200 msec around center
-    
-        % Convert times to samples
-        center_samples = round(adjusted_times_sec * fs);  % [nIEDs x 1]
+        pre_samples = round(0.5 * fs);    % 1250 samples before the center
+        post_samples = round(0.5 * fs);   % 1250 samples after the center
+        search_margin = round(0.2 * fs);  % 500 samples (±200 ms): search ±200 msec around center
     
         % Initialize output
         aligned_times = nan(n_ieds, n_channels);  % each column: one channel's aligned IEDs
@@ -665,52 +830,85 @@ function align_all_ieds(fig)
             end
             idx1 = mono_map(ch1);
             idx2 = mono_map(ch2);
-            template = avg_template(ch, :);
-    
+            template = avg_template;  % only one row, main channel template
+
             for i = 1:n_ieds
-                center = center_samples(i);
-    
-                % Define search window
-                start_idx = center - search_margin - pre_samples;
-                end_idx   = center + search_margin + post_samples;
-    
+                if skip_flags(i)
+                    % Use adjusted time and apply cross-correlation
+                    center = round(adjusted_times(i) * fs); % center = adjusted/original IED times
+                    use_crosscorr = true;
+                else
+                    % Use manual marked time directly (no alignment)
+                    center = round(manual_times(i) * fs); % the ~25 IEDs that have already been marked by the user form the first GUI
+                    aligned_times(i, ch) = center;  % direct use
+                    continue;  % skip cross-correlation
+                end
+
+                % Define search window for segment of EEG is considered for cross-correlation
+                start_idx = center - search_margin - pre_samples;  % start_idx = center - 500 - 1250 = center - 1750
+                end_idx   = center + search_margin + post_samples; % end_idx   = center + 500 + 1250 = center + 1750
+                % full_segment = eeg(idx1, center - 1750 : center + 1750);
+                % Length = center + 1750 - (center - 1750) + 1 = 3501 samples
+                % At 2500 Hz → 3501 samples/ 2500 = 1.4004 seconds
+                % This is centered around the IED time ±0.7 sec
+                % You are preparing a large enough segment (±0.7 s) to: Later slide the template (which is 1.0 second long, 2500 samples) across a centered ±200 ms window (±500 samples)
+                % That’s why you need 0.7 s on both sides of the center to allow for this sliding.
+
                 if start_idx < 1 || end_idx > size(eeg, 2)
                     continue;
                 end
-    
+
                 full_segment = eeg(idx1, start_idx:end_idx) - eeg(idx2, start_idx:end_idx);
-    
+
                 % Slide template across center ± search_margin
                 max_corr = -inf;
                 best_lag = 0;
-    
-                for lag = -search_margin:search_margin
+
+                for lag = -search_margin:search_margin % ±500 samples (±200 ms):  all 401 lags for alignment, from -200 ms to +200 ms.
                     seg_start = search_margin + 1 + lag;
                     seg_end   = seg_start + template_len - 1;
-    
+
                     if seg_start < 1 || seg_end > length(full_segment)
                         continue;
                     end
-    
+
                     window = full_segment(seg_start:seg_end);
                     r = corrcoef(window, template);
                     c = r(1, 2);
-    
+
                     if ~isnan(c) && c > max_corr
                         max_corr = c;
                         best_lag = lag;
                     end
                 end
-    
-                % Update aligned time for this channel and IED
+
+                % Update aligned time (shifted from adjusted time)
                 aligned_times(i, ch) = center + best_lag;
             end
+
             % Optional: update waitbar per channel
             waitbar(ch / n_channels, wait, sprintf('Aligning: %d/%d channels...', ch, n_channels));
         end
 
         % === Store result
         fig.UserData.templateAlignedTimes = round(aligned_times);
+        fprintf('[✔] Stored %d aligned IEDs × %d channels in templateAlignedTimes.\n', ...
+            size(aligned_times, 1), size(aligned_times, 2));
+        fprintf('[ℹ️] Includes %d manually marked IEDs and %d cross-correlation aligned IEDs.\n', ...
+            sum(~fig.UserData.manualSkipFlags), ...
+            sum(fig.UserData.manualSkipFlags));
+
+        aligned_secs = aligned_times / fs;
+        avg_times = nanmean(aligned_secs, 2);
+        save_path = fullfile(fig.UserData.output_dir, ...
+            [fig.UserData.subject_id '_' fig.UserData.run_id '_' fig.UserData.ied_id '_final_aligned.txt']);
+
+        fid = fopen(save_path, 'w');
+        fprintf(fid, '# Channel used for IED alignment: %s\n', fig.UserData.marking_channel_used);
+        fprintf(fid, '%.2f\n', avg_times);
+        fclose(fid);
+
+        fprintf('[💾] Saved aligned IED times to: %s\n', save_path);
 
         % === Plot final average automatically
 %         compute_final_avg(fig);
@@ -728,7 +926,8 @@ function align_all_ieds(fig)
     close(wait);    
 end
 
-%% To produce clean final per-channel average IED waveforms
+%% function 8
+% To produce clean final per-channel average IED waveforms
 % input: templateAlignedTimes, eeg_data
 % output:  eeg_data	finalAvgTemplate → [nChannels × time] matrix
 % Aim: To produce clean final per-channel average IED waveforms
@@ -784,7 +983,7 @@ function compute_final_avg(fig)
     plot_avg_template(fig, 'finalAvgTemplate');  
 end
 
-%%
+%% function 9
 function enable_onset_marking(fig)
     fig.UserData.isMarkingOnset = true;
     fig.UserData.isMarkingPeak = false;
@@ -792,7 +991,7 @@ function enable_onset_marking(fig)
     uialert(fig, 'Click on a waveform to mark the ONSET', 'Mark Onset');   
 end
 
-%%
+%% function 10
 function enable_peak_marking(fig)
     fig.UserData.isMarkingPeak = true;
     fig.UserData.isMarkingOnset = false;
@@ -800,26 +999,21 @@ function enable_peak_marking(fig)
     uialert(fig, 'Click on a waveform to mark the PEAK.', 'Mark Peak');
 end
 
-%%
+%% function 11
 function handle_click_on_avg(fig, src, ~)
-    disp('[🧠] handle_click_on_avg called.');
-
     if ~fig.UserData.isMarkingOnset && ~fig.UserData.isMarkingPeak
         disp('[⚠️] Not in marking mode. Exiting.');
         return;
     end
 
     click_ax = src;  % use the actual clicked axis!
-    disp(['[🖱] Clicked object: ', class(click_ax)]);
 
     if ~isa(click_ax, 'matlab.ui.control.UIAxes')
-        disp('[❌] Clicked object is not a UIAxes.');
         return;
     end
 
     cp = click_ax.CurrentPoint;
     x_click = cp(1, 1);  % X in seconds
-    disp(['[📍] Clicked X position (seconds): ', num2str(x_click)]);
 
     % Determine which channel was clicked
     ax_list = fig.UserData.axesHandles;
@@ -827,22 +1021,18 @@ function handle_click_on_avg(fig, src, ~)
     ax_idx = find(ax_list == click_ax, 1);
 
     if isempty(ax_idx)
-        disp('[❌] Could not match clicked axis to one of the plotted axes.');
         return;
     end
     ch_idx = ch_offset + ax_idx;
-    disp(['[🔍] Clicked on channel index: ', num2str(ch_idx)]);
 
     % Save the time
     if fig.UserData.isMarkingOnset
         fig.UserData.onsetTimes(ch_idx) = x_click;
         clr = [0 0.6 0];
-        disp('[✅] Marked ONSET.');
         label_type = 'onset';
     elseif fig.UserData.isMarkingPeak
         fig.UserData.peakTimes(ch_idx) = x_click;
         clr = [0.5 0 0.8];
-        disp('[✅] Marked PEAK.');
         label_type = 'peak';
     else
         label_type = 'unknown';
@@ -861,7 +1051,7 @@ function handle_click_on_avg(fig, src, ~)
     fprintf('Marked %s at %.3f sec on channel %d\n', label_type, x_click, ch_idx);
 end
 
-%%
+%% function 12
 function save_onset_peak(fig)
     onset = fig.UserData.onsetTimes;
     peak  = fig.UserData.peakTimes;
@@ -913,7 +1103,8 @@ function save_onset_peak(fig)
 end
 
 
-%% Create Button Functions
+%% function 13 
+% Create Button Functions
 function go_to_next_page(fig)
     maxPage = ceil(fig.UserData.totalChannels / fig.UserData.tracesPerPage);
     if fig.UserData.currentPage < maxPage
@@ -933,7 +1124,7 @@ function go_to_next_page(fig)
     end
 end
 
-%%
+%% function 14
 function go_to_previous_page(fig)
     if fig.UserData.currentPage > 1
         fig.UserData.currentPage = fig.UserData.currentPage - 1;
@@ -952,7 +1143,7 @@ function go_to_previous_page(fig)
     end
 end
 
-%%
+%% function 15
 function update_subject_info_label(fig)
     % Basic subject/run/IED info
     if isfield(fig.UserData, 'subject_id') && isfield(fig.UserData, 'run_id') && isfield(fig.UserData, 'ied_id')
@@ -981,7 +1172,7 @@ function update_subject_info_label(fig)
     fig.UserData.subjectInfoLabel.Text = label;
 end
 
-%%
+%% function 16
 function [onset, peak] = load_onset_peak_txt(txtfile, ch_names)
 
     fid = fopen(txtfile, 'r');
@@ -1017,7 +1208,7 @@ function [onset, peak] = load_onset_peak_txt(txtfile, ch_names)
     end
 end
 
-%%
+%% function 17
 function [eeg_data, sampling_rate, channel_labels, ch_name_to_index] = load_eeg_bin_with_labels(eeg_bin_path)
 %LOAD_EEG_BIN_WITH_LABELS Load EEG data and channel labels from ICE-format .bin files.
 %

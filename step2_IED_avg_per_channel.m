@@ -34,8 +34,8 @@ function manual_ied_loader_gui()
     leftPanel.Layout.Column = 1;
 
     % Vertical layout inside left panel
-    leftLayout = uigridlayout(leftPanel, [10, 1]);
-    leftLayout.RowHeight = repmat({'fit'}, 1, 10);
+    leftLayout = uigridlayout(leftPanel, [12, 1]);
+    leftLayout.RowHeight = repmat({'fit'}, 1, 12);
     leftLayout.ColumnWidth = {'1x'};
 
     % EEG file selection button
@@ -45,12 +45,7 @@ function manual_ied_loader_gui()
     % manaul IED file selection button (output file from the previous GUI)
     iedButton = uibutton(leftLayout, 'Text', 'Select IED Manual Timings .txt File', ...
         'ButtonPushedFcn', @(btn,event) select_manual_ied_file(fig));
-
-    % Select Original Adjusted IED File (all IEDs) marked by epileptologists
-    selectAdjustedIEDBtn = uibutton(leftLayout, ...
-        'Text', 'Select Adjusted IEDs .txt File', ...
-        'ButtonPushedFcn', @(btn,event) load_adjusted_ieds_file(fig));
-   
+  
     % Page buttons for EEG channels: Next and Previous buttons in leftLayout
     nextButton = uibutton(leftLayout, 'Text', 'Next EEG Channel ➤', ...
         'ButtonPushedFcn', @(btn, event) go_to_next_page(fig));
@@ -58,15 +53,20 @@ function manual_ied_loader_gui()
     prevButton = uibutton(leftLayout, 'Text', '◀ Prev. EEG Channel', ...
         'ButtonPushedFcn', @(btn, event) go_to_previous_page(fig));
 
+    % Select Original Adjusted IED File (all IEDs) marked by epileptologists
+    selectAdjustedIEDBtn = uibutton(leftLayout, ...
+        'Text', 'Select Adjusted IEDs .txt File', ...
+        'ButtonPushedFcn', @(btn,event) load_adjusted_ieds_file(fig));
+
     % Button: Align All IEDs Using Template
     alignAllButton = uibutton(leftLayout, ...
-    'Text', 'Align All IEDs (Cross-corr)', ...
-    'ButtonPushedFcn', @(btn,event) align_all_ieds(fig));
+        'Text', 'Align All IEDs (Cross-corr)', ...
+        'ButtonPushedFcn', @(btn,event) align_all_ieds(fig));
 
     % Compute Final Average IED
     finalAvgButton = uibutton(leftLayout, ...
-    'Text', 'Plot Final Average (All IEDs)', ...
-    'ButtonPushedFcn', @(btn,event) compute_final_avg(fig));
+        'Text', 'Plot Final Average (All IEDs)', ...
+        'ButtonPushedFcn', @(btn,event) compute_final_avg(fig));
 
     % Mark Onset & Peak (on Avg IED)
     markOnsetButton = uibutton(leftLayout, ...
@@ -81,6 +81,29 @@ function manual_ied_loader_gui()
     saveOnsetPeakButton = uibutton(leftLayout, ...
     'Text', 'Save Onset & Peak', ...
     'ButtonPushedFcn', @(btn,event) save_onset_peak(fig));
+
+    % Add sorting dropdown inside leftLayout
+    sortRow = uigridlayout(leftLayout, [1, 2]);
+    sortRow.Layout.Row = 11;  % next available row
+    sortRow.Layout.Column = 1;
+    sortRow.ColumnWidth = {'fit', '1x'};
+
+    uilabel(sortRow, ...
+        'Text', 'Sort IEDs by:', ...
+        'FontSize', 11, ...
+        'HorizontalAlignment', 'right');
+
+    sortDropdown = uidropdown(sortRow, ...
+        'Items', {'onset', 'peak'}, ...
+        'FontSize', 11);
+
+    % Add plot button below dropdown
+    plotSortBtn = uibutton(leftLayout, ...
+        'Text', 'Plot Superimposed Sorted IEDs', ...
+        'ButtonPushedFcn', @(btn, event) ...
+        plot_all_superimposed_IEDs_sorted(fig, ...
+        sortDropdown.Value));
+
 
     fig.UserData.avgTemplate25 = [];      % Initial avg template (channels x time)
     fig.UserData.templateAlignedTimes = [];  % Refined times via cross-corr (IEDs x channels)
@@ -443,6 +466,7 @@ function select_manual_ied_file(fig)
     % === Step 10: Attempt to auto-load saved onset/peak if it exists ===
     % Build expected filename
     parent_dir = fileparts(ied_txt_path);  % This is IED_Cleaned
+    fig.UserData.parent_dir = parent_dir;
     save_dir = fullfile(parent_dir, '..', 'avg_onset_peak_times');
     expected_txt = fullfile(save_dir, sprintf('%s_%s_%s_avg_onset_peak_times.txt', ...
         txt_subject, txt_run, txt_ied));
@@ -636,7 +660,8 @@ function compute_avg_template(fig)
 end
 
 
-%% function 6
+%% function 6 
+% average template over ~25 manually selected IED times
 function plot_avg_template(fig, template_key)
     % template_key: 'avgTemplate25' or 'finalAvgTemplate'
 
@@ -691,7 +716,11 @@ function plot_avg_template(fig, template_key)
     global_min = min(visible_traces(:));
     global_max = max(visible_traces(:));
     yrange = global_max - global_min;
-    pad = 0.1 * yrange;
+    if yrange == 0
+        pad = 1;  % minimum padding if all values are the same
+    else
+        pad = 0.1 * yrange;
+    end
     global_ylim = [global_min - pad, global_max + pad];
     
     % Plot traces
@@ -727,6 +756,22 @@ function plot_avg_template(fig, template_key)
             % Plot the trace
             lineHandle = plot(ax, t, trace, 'Color', trace_color, 'LineWidth', 1.5);
 
+            % Save individual subplot image (optional: skip empty ones)
+            if isfield(fig.UserData, 'parent_dir')
+                save_dir = fullfile(fig.UserData.parent_dir, 'avg_IED_subplots');
+            else
+                warning('Parent directory not found. Skipping subplot saving.');
+                return;
+            end
+            if ~exist(save_dir, 'dir')
+                mkdir(save_dir);
+            end
+            fig_filename = sprintf('%s_%s_%s_ch%02d_%s.png', ...
+                fig.UserData.subject_id, fig.UserData.run_id, fig.UserData.ied_id, ...
+                chIdx, ch_name);
+%             exportgraphics(ax, fullfile(save_dir, fig_filename));
+
+
             % Show previously marked onset/peak if available
             if ~isnan(fig.UserData.onsetTimes(chIdx))
                 xline(ax, fig.UserData.onsetTimes(chIdx), '--', 'Color', [0 0.6 0], 'LineWidth', 2);  % green onset
@@ -744,7 +789,13 @@ function plot_avg_template(fig, template_key)
             ax.PickableParts = 'all';
 
             xlim(ax, [t(1), t(end)]);
-            ylim(ax, safe_ylim);  % <-- ensures consistent scaling even for plotted traces
+            % Ensure Y-limits are valid
+            if numel(safe_ylim) == 2 && all(isfinite(safe_ylim)) && diff(safe_ylim) > 0
+                ylim(ax, safe_ylim);
+            else
+                ylim(ax, [-1 1]);  % fallback to default
+                warning('[⚠️] Invalid Y-limits detected for channel %d. Using fallback [-1 1].', chIdx);
+            end
             title(ax, sprintf('%s (ch %d of %d)', ch_name, chIdx, nChannels));
             xlabel(ax, 'Time (s)');
             ylabel(ax, 'Amplitude');
@@ -752,12 +803,17 @@ function plot_avg_template(fig, template_key)
         else
             % Clear unused axes
             cla(ax);
-            ax.Title.String = sprintf('Channel %d (empty)', i);
+            chIdx = (fig.UserData.currentPage - 1) * fig.UserData.tracesPerPage + i;
+            ax.Title.String = sprintf('Channel %d (empty)', chIdx);
             ax.XLim = [t(1), t(end)];
-            ax.YLim = safe_ylim;
-            xlabel(ax, 'Time (s)');
-            ylabel(ax, 'Amplitude');
-            ax.Color = 'white';
+
+            % Validate Y-limits before applying
+            if numel(safe_ylim) == 2 && all(isfinite(safe_ylim)) && diff(safe_ylim) > 0
+                ax.YLim = safe_ylim;
+            else
+                ax.YLim = [-1 1];  % fallback
+                warning('[⚠️] Invalid Y-limits in EMPTY axis (%d). Using fallback [-1 1].', i);
+            end
         end
     end
 
@@ -1027,19 +1083,48 @@ function handle_click_on_avg(fig, src, ~)
 
     % Save the time
     if fig.UserData.isMarkingOnset
+        alreadyMarked = ~isnan(fig.UserData.onsetTimes(ch_idx));
+        if alreadyMarked
+            choice = uiconfirm(fig, ...
+                sprintf('Onset already marked on channel %d.\nReplace with new time?', ch_idx), ...
+                'Replace Onset?', ...
+                'Options', {'Yes', 'No'}, ...
+                'DefaultOption', 2);
+            if strcmp(choice, 'No')
+                return;
+            end
+        end
         fig.UserData.onsetTimes(ch_idx) = x_click;
         clr = [0 0.6 0];
         label_type = 'onset';
+
     elseif fig.UserData.isMarkingPeak
+        alreadyMarked = ~isnan(fig.UserData.peakTimes(ch_idx));
+        if alreadyMarked
+            choice = uiconfirm(fig, ...
+                sprintf('Peak already marked on channel %d.\nReplace with new time?', ch_idx), ...
+                'Replace Peak?', ...
+                'Options', {'Yes', 'No'}, ...
+                'DefaultOption', 2);
+            if strcmp(choice, 'No')
+                return;
+            end
+        end
         fig.UserData.peakTimes(ch_idx) = x_click;
         clr = [0.5 0 0.8];
         label_type = 'peak';
+
     else
         label_type = 'unknown';
+        return;
     end
 
     % Draw a vertical line at that point
     hold(click_ax, 'on');
+    % Remove existing xline of the same type (if any)
+    existing_lines = findall(click_ax, 'Type', 'ConstantLine', 'Color', clr);
+    delete(existing_lines);
+
     xline(click_ax, x_click, '--', 'Color', clr, 'LineWidth', 2);
     hold(click_ax, 'off');
 
@@ -1209,6 +1294,83 @@ function [onset, peak] = load_onset_peak_txt(txtfile, ch_names)
 end
 
 %% function 17
+% Superimpose all channel traces for one subject into one
+function plot_all_superimposed_IEDs_sorted(fig, sort_by)
+    % Inputs:
+    %   fig      - your GUI handle with all UserData
+    %   sort_by  - 'onset' or 'peak'
+
+    if strcmp(sort_by, 'onset')
+        latencies = fig.UserData.onsetTimes;
+    elseif strcmp(sort_by, 'peak')
+        latencies = fig.UserData.peakTimes;
+    else
+        uialert(fig, 'Invalid sort criterion. Must be "onset" or "peak".', ...
+            'Sort Error');
+        return;
+    end
+    % Add to the start of plot_all_superimposed_IEDs_sorted
+    if all(isnan(latencies))
+        uialert(fig, 'No onset or peak times found. Please mark them first.', ...
+            'Missing Data');
+        return;
+    end
+
+    avg_data = fig.UserData.finalAvgTemplate;  % or avgTemplate25
+    fs = fig.UserData.fs;
+    t = linspace(-0.5, 0.5, size(avg_data, 2));
+    nChannels = size(avg_data, 1);
+
+    % Choose which latency to sort by
+    if strcmp(sort_by, 'onset')
+        latencies = fig.UserData.onsetTimes;
+    elseif strcmp(sort_by, 'peak')
+        latencies = fig.UserData.peakTimes;
+    else
+        error('Invalid sort_by option. Use ''onset'' or ''peak''.');
+    end
+
+    % Handle NaNs: put them at the end
+    [~, sorted_idx] = sortrows([isnan(latencies(:)), latencies(:)]);
+
+    cmap = parula(nChannels);  % use perceptual color map
+
+    figure('Name', ['IEDs sorted by ' sort_by], 'Color', 'w'); hold on;
+
+    for plot_order = 1:nChannels
+        ch = sorted_idx(plot_order);
+        trace = avg_data(ch, :);
+        if all(isnan(trace))
+            continue;
+        end
+        label = sprintf('%s (%.2f s)', fig.UserData.channelnames_bipolar{ch}, latencies(ch));
+        plot(t, trace, 'Color', cmap(plot_order, :), ...
+            'DisplayName', label, 'LineWidth', 1.5);
+    end
+
+    title(sprintf('Superimposed IEDs sorted by %s latency | %s | %s | %s', ...
+        sort_by, fig.UserData.subject_id, fig.UserData.run_id, fig.UserData.ied_id));
+    xlabel('Time (s)');
+    ylabel('Amplitude');
+    legend('show', 'Interpreter', 'none', 'Location', 'eastoutside');
+    grid on;
+
+    % Build save path
+    save_dir = fullfile(fig.UserData.output_dir, 'superimposed_plots');
+    if ~exist(save_dir, 'dir')
+        mkdir(save_dir);
+    end
+
+    % Save figure
+    filename = sprintf('%s_%s_%s_superimposed_%s_sorted.png', ...
+        fig.UserData.subject_id, fig.UserData.run_id, ...
+        fig.UserData.ied_id, sort_by);
+    exportgraphics(gcf, fullfile(save_dir, filename));
+    fprintf('[💾] Saved superimposed figure to: %s\n', filename);
+
+end
+
+%% function 18
 function [eeg_data, sampling_rate, channel_labels, ch_name_to_index] = load_eeg_bin_with_labels(eeg_bin_path)
 %LOAD_EEG_BIN_WITH_LABELS Load EEG data and channel labels from ICE-format .bin files.
 %

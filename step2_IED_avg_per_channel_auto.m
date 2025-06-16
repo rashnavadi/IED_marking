@@ -75,7 +75,7 @@ function manual_ied_loader_gui()
 
     % Save Onset/Peak
     saveOnsetPeakButton = uibutton(leftLayout, ...
-    'Text', 'Save Onset & Peak', ...
+    'Text', 'Save Onset', ...
     'ButtonPushedFcn', @(btn,event) save_onset_peak(fig));
 
     % Add sorting dropdown inside leftLayout
@@ -1034,7 +1034,7 @@ function compute_final_avg(fig)
     fprintf('[✔] Final average computed from aligned IEDs.\n');
 
     % === 🧠 AUTO-DETECT PEAKS BASED ON MAIN CHANNEL POLARITY
-    t = linspace(-0.5, 0.5, size(win_len, 2));  % full time vector
+    t = linspace(-0.5, 0.5, win_len);  % ✅ Correct: generate time vector based on window length
     peakTimes = nan(1, n_channels);
 
     % Get main channel and determine polarity
@@ -1064,18 +1064,37 @@ function compute_final_avg(fig)
             [~, idx_local] = max(trace_window);
         end
         peakTimes(ch) = t_window(idx_local);
-    end
+   end
 
-    fig.UserData.peakTimes = peakTimes;
-    fprintf('[✅] Automatically detected peak times based on %s polarity.\n', ...
-        ternary(is_negative, 'negative', 'positive'));
-    msg = sprintf('Peak times were automatically detected for all channels based on %s polarity in the main channel (%s). You may now mark the onsets manually.', ...
-        ternary(is_negative, 'negative', 'positive'), main_label);
-    uialert(fig, msg, 'Peaks Auto-Detected');
+   fig.UserData.peakTimes = peakTimes;
+   fprintf('[✅] Automatically detected peak times based on %s polarity.\n', ...
+       ternary(is_negative, 'negative', 'positive'));
+   msg = sprintf('Peak times were automatically detected for all channels based on %s polarity in the main channel (%s). You may now mark the onsets manually.', ...
+       ternary(is_negative, 'negative', 'positive'), main_label);
+   uialert(fig, msg, 'Peaks Auto-Detected');
 
+   % Save peak times to disk
+   save_dir = fullfile(fig.UserData.output_dir, 'avg_onset_peak_times');
+   if ~exist(save_dir, 'dir')
+       mkdir(save_dir);
+   end
+   outfile = fullfile(save_dir, sprintf('%s_%s_%s_auto_peaks.txt', ...
+       fig.UserData.subject_id, fig.UserData.run_id, fig.UserData.ied_id));
 
-    % === Finally, plot
-    plot_avg_template(fig, 'finalAvgTemplate');
+   fid = fopen(outfile, 'w');
+   fprintf(fid, '# Auto-detected peaks | Main Channel: %s\n', fig.UserData.marking_channel_used);
+   for ch = 1:length(fig.UserData.peakTimes)
+       label = fig.UserData.channelnames_bipolar{ch};
+       pk = fig.UserData.peakTimes(ch);
+       if ~isnan(pk)
+           fprintf(fid, '%s\t%.3f\n', label, pk);
+       end
+   end
+   fclose(fid);
+   fprintf('[💾] Auto-detected peak times saved to: %s\n', outfile);
+
+   % === Finally, plot
+   plot_avg_template(fig, 'finalAvgTemplate');
 end
 
 function out = ternary(cond, a, b)
@@ -1087,7 +1106,6 @@ function out = ternary(cond, a, b)
 end
 
 
-
 %% function 9
 function enable_onset_marking(fig)
     fig.UserData.isMarkingOnset = true;
@@ -1097,12 +1115,12 @@ function enable_onset_marking(fig)
 end
 
 %% function 10
-function enable_peak_marking(fig)
-    fig.UserData.isMarkingPeak = true;
-    fig.UserData.isMarkingOnset = false;
-    fig.Pointer = 'crosshair';
-    uialert(fig, 'Click on a waveform to mark the PEAK.', 'Mark Peak');
-end
+% function enable_peak_marking(fig)
+%     fig.UserData.isMarkingPeak = true;
+%     fig.UserData.isMarkingOnset = false;
+%     fig.Pointer = 'crosshair';
+%     uialert(fig, 'Click on a waveform to mark the PEAK.', 'Mark Peak');
+% end
 
 %% function 11
 function handle_click_on_avg(fig, src, ~)
@@ -1111,7 +1129,7 @@ function handle_click_on_avg(fig, src, ~)
         return;
     end
 
-    click_ax = src;  % use the actual clicked axis!
+    click_ax = src;
 
     if ~isa(click_ax, 'matlab.ui.control.UIAxes')
         return;
@@ -1124,13 +1142,12 @@ function handle_click_on_avg(fig, src, ~)
     ax_list = fig.UserData.axesHandles;
     ch_offset = (fig.UserData.currentPage - 1) * fig.UserData.tracesPerPage;
     ax_idx = find(ax_list == click_ax, 1);
-
     if isempty(ax_idx)
         return;
     end
     ch_idx = ch_offset + ax_idx;
 
-    % Save the time
+    % === ✅ ONSET MARKING ONLY ===
     if fig.UserData.isMarkingOnset
         alreadyMarked = ~isnan(fig.UserData.onsetTimes(ch_idx));
         if alreadyMarked
@@ -1144,43 +1161,27 @@ function handle_click_on_avg(fig, src, ~)
             end
         end
         fig.UserData.onsetTimes(ch_idx) = x_click;
-        clr = [0 0.6 0];
+        clr = [0 0.6 0];  % green
         label_type = 'onset';
 
-%     elseif fig.UserData.isMarkingPeak
-        alreadyMarked = ~isnan(fig.UserData.peakTimes(ch_idx));
-        if alreadyMarked
-            choice = uiconfirm(fig, ...
-                sprintf('Peak already marked on channel %d.\nReplace with new time?', ch_idx), ...
-                'Replace Peak?', ...
-                'Options', {'Yes', 'No'}, ...
-                'DefaultOption', 2);
-            if strcmp(choice, 'No')
-                return;
-            end
-        end
-        fig.UserData.peakTimes(ch_idx) = x_click;
-        clr = [0.5 0 0.8];
-        label_type = 'peak';
-
+    elseif fig.UserData.isMarkingPeak
+        % 🔒 You can disable peak marking entirely:
+        uialert(fig, 'Peaks are already auto-detected. Manual marking is disabled.', ...
+            'Manual Peak Disabled');
+        return;
     else
-        label_type = 'unknown';
         return;
     end
 
-    % Draw a vertical line at that point
+    % Draw vertical line (overwrite if exists)
     hold(click_ax, 'on');
-    % Remove existing xline of the same type (if any)
     existing_lines = findall(click_ax, 'Type', 'ConstantLine', 'Color', clr);
     delete(existing_lines);
 
     xline(click_ax, x_click, '--', 'Color', clr, 'LineWidth', 2);
     hold(click_ax, 'off');
 
-    % Keep marking mode ON (continuous marking mode)
-    fig.Pointer = 'crosshair';  % keep crosshair
-    % Do NOT reset isMarkingOnset / isMarkingPeak
-
+    fig.Pointer = 'crosshair';
 
     fprintf('Marked %s at %.3f sec on channel %d\n', label_type, x_click, ch_idx);
 end

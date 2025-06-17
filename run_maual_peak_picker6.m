@@ -516,7 +516,14 @@ function drag_line(fig)
     visible_idx = startIdx:endIdx;
 
     % ✅ Find local index on current page
-    local_idx = find(visible_idx == selected_idx, 1);  % safer: ensures scalar output
+    if isscalar(selected_idx)
+        local_idx = find(visible_idx == selected_idx, 1);  % safe scalar comparison
+    else
+        [tf, local_idx] = ismember(selected_idx, visible_idx);
+        if ~tf
+            return;  % skip dragging if selected index isn't visible
+        end
+    end
     if isempty(local_idx) || local_idx > numel(fig.UserData.axesList)
         return;  % Channel not visible
     end

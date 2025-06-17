@@ -1,6 +1,8 @@
 
 
-
+%% Launch first GUI to manually find the peak in the main channel
+% By Tahere Rashnavadi
+% Last update: June 12, 2025
 
 %%
 function manual_ied_loader_gui()
@@ -514,7 +516,7 @@ function drag_line(fig)
     visible_idx = startIdx:endIdx;
 
     % ✅ Find local index on current page
-    local_idx = find(visible_idx == selected_idx);
+    local_idx = find(visible_idx == selected_idx, 1);  % safer: ensures scalar output
     if isempty(local_idx) || local_idx > numel(fig.UserData.axesList)
         return;  % Channel not visible
     end

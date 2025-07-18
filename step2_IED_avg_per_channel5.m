@@ -868,16 +868,16 @@ function plot_avg_template(fig, template_key)
     end
 
     % PLOTTING ==== Compute global safe Y-limit based on all visible channels ====
-    visible_traces = avg_data(visibleIdx, :);
-    global_min = min(visible_traces(:));
-    global_max = max(visible_traces(:));
-    yrange = global_max - global_min;
-    if yrange == 0
-        pad = 1;  % minimum padding if all values are the same
-    else
-        pad = 0.1 * yrange;
-    end
-    global_ylim = [global_min - pad, global_max + pad];
+%     visible_traces = avg_data(visibleIdx, :);
+%     global_min = min(visible_traces(:));
+%     global_max = max(visible_traces(:));
+%     yrange = global_max - global_min;
+%     if yrange == 0
+%         pad = 1;  % minimum padding if all values are the same
+%     else
+%         pad = 0.1 * yrange;
+%     end
+%     global_ylim = [global_min - pad, global_max + pad];
 
     % Plot traces
     for i = 1:length(axesHandles)
@@ -913,7 +913,21 @@ function plot_avg_template(fig, template_key)
             end
 
             % Plot the trace
-            safe_ylim = global_ylim;
+            %             safe_ylim = global_ylim;
+            % Channel-specific Y-limits with 10% padding
+            y = trace(~isnan(trace));  % Remove NaNs
+            if isempty(y)
+                safe_ylim = [-1 1];  % fallback
+            else
+                yrange = max(y) - min(y);
+                if yrange == 0
+                    safe_ylim = [min(y)-1, max(y)+1];
+                else
+                    pad = 0.1 * yrange;
+                    safe_ylim = [min(y)-pad, max(y)+pad];
+                end
+            end
+
             lineHandle = plot(ax, t, trace, 'Color', trace_color, 'LineWidth', 2);
             lineHandle.HitTest = 'off';
 

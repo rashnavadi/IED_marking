@@ -1113,7 +1113,8 @@ function align_all_ieds(fig)
         fprintf('[ℹ️] Includes %d manually marked IEDs and %d cross-correlation aligned IEDs.\n', sum(~fig.UserData.manualSkipFlags), sum(fig.UserData.manualSkipFlags));
 
         aligned_secs = aligned_times / fs; % all IEDs after alignments using cross-corr (in seconds)
-        avg_times = nanmean(aligned_secs, 2);
+%         avg_times = nanmean(aligned_secs, 2);
+        avg_times = mean(aligned_secs, 2, 'omitnan');
         save_path = fullfile(fig.UserData.output_dir, ...
             [fig.UserData.subject_id '_' fig.UserData.run_id '_' fig.UserData.ied_id '_final_aligned.txt']);
 

@@ -71,7 +71,6 @@ function manual_ied_loader_gui()
         'Tag', 'TimeWindowMenu', ...
         'ValueChangedFcn', @(dd, event) changeTimeWindow(fig));
     % ==== 
-
     % select the channel to adjust IEDs on 
     selectChanBtn = uibutton(leftLayout, ...
         'Text', 'Marking Channel', ...
@@ -373,7 +372,6 @@ function update_plot(fig)
     fprintf('[DEBUG] Dropdown value: %s → win_sec = %.2f\n', val, win_sec);
     fprintf('[DEBUG] fs = %d Hz | pre_samples = %d | post_samples = %d | total = %d\n', ...
         fs, pre_samples, post_samples, length(t));
-
     % ===
     
     win_samples = (length(t) - 1) / 2;

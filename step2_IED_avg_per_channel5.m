@@ -736,10 +736,12 @@ function compute_avg_all_channels(fig)
     win_sec = fig.UserData.win_sec;
     pre_samples = round(win_sec * fs);
     post_samples = round(win_sec * fs);
-
+    
     win_len = pre_samples + post_samples + 1;
     n_channels = numel(channelnames);
     avg_matrix = nan(n_channels, win_len);
+    std_over_segments = nan(n_channels, 1);
+    std_full_channel  = nan(n_channels, 1);
 
     for ch = 1:n_channels
         label = channelnames{ch};
@@ -764,17 +766,29 @@ function compute_avg_all_channels(fig)
         end
 
         if ~isempty(segments)
-            avg_matrix(ch, :) = mean(segments, 1);
+            avg_wave = mean(segments, 1);              % 1 × samples
+            avg_matrix(ch, :) = avg_wave;
+            std_over_segments(ch,1) = std(avg_wave);   % one scalar
         end
+        % STD of whole EEG channel (regardless of IEDs)
+        bipolar_full = eeg(idx1,:) - eeg(idx2,:);
+        std_full_channel(ch,1) = std(bipolar_full);
     end
+
+    % Store in fig
     fig.UserData.avgAllChannelsComputed = true;
     fig.UserData.avgAllChannels = avg_matrix;
+    fig.UserData.stdOverSegments    = std_over_segments;  % NEW
+    fig.UserData.stdFullChannel     = std_full_channel;   % NEW
     fig.UserData.avgAllChannelsSource = source;
     fig.UserData.avg_t = (-pre_samples:post_samples) / fs;
     plot_avg_template(fig, 'avgAllChannels');
-    fig.UserData.currentTemplateKey = 'avgAllChannels';  % NEW LINE
+    fig.UserData.currentTemplateKey = 'avgAllChannels';  
 
-    fig.UserData.finalAvgTemplate = avg_matrix;  % Set final template alias
+    % Save results to disk
+    fig.UserData.finalAvgTemplate = avg_matrix; % Set final template alias
+    fig.UserData.finalStdOverSegments    = std_over_segments;
+    fig.UserData.finalStdFullChannel     = std_full_channel;
     save_final_avg_template(fig);  % Reuse the save function
 
 
@@ -1222,11 +1236,28 @@ function save_final_avg_template(fig)
     set(gca, 'FontSize', 12);
     hold off;
 
-    % Save
+    % Save PNG
     png_path = fullfile(save_dir, [base '_final_avg_template.png']);
     saveas(fig_avg, png_path);
-%     close(fig_avg);
+    %     close(fig_avg);
     fprintf('[🖼] PNG export saved: %s\n', png_path);
+
+    % ----------- SAVE NUMERIC DATA -------------
+    mat_path = fullfile(save_dir, [base '_final_avg_template.mat']);
+    avg_matrix              = fig.UserData.finalAvgTemplate;
+    std_over_avg_segment    = fig.UserData.finalStdOverSegments;   % scalar per channel
+    std_full_channel        = fig.UserData.finalStdFullChannel;    % scalar per channel
+    save(mat_path, 't', 'avg_matrix', 'std_over_avg_segment', 'std_full_channel', '-v7.3');
+
+     channelnames         = fig.UserData.channelnames_bipolar;   % NEW: save channel labels
+
+     save(mat_path, 't', 'avg_matrix', 'std_over_avg_segment', 'std_full_channel', 'channelnames', '-v7.3');
+     T = table(channelnames(:), std_over_avg_segment, std_full_channel, ...
+         'VariableNames', {'Channel', 'STD_AvgSegment', 'STD_FullChannel'});
+     save(mat_path, 't', 'avg_matrix', 'std_over_avg_segment', 'std_full_channel', 'channelnames', 'T', '-v7.3');
+
+
+    fprintf('[💾] MAT file saved: %s\n', mat_path);
 end
 
 

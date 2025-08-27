@@ -523,6 +523,9 @@ end
 % compute the average IED template from the main channel only over the 25 manually marked IEDs
 % only use the main channel (the one noted in the first line of the manual IED .txt file) to compute the average template
 % this func gives single-channel template for aligning IEDs across all channels
+% 1- Uses only the 25 manually marked IEDs on the main channel.
+% 2- Purpose: build the template waveform (from main channel only).
+% 3- This template is later used in align_all_ieds to realign all IEDs.
 
 function compute_avg_template(fig)
     % Compute average IED template only from the manually marked main channel
@@ -770,16 +773,30 @@ function compute_avg_all_channels(fig)
             avg_matrix(ch, :) = avg_wave;
             std_over_segments(ch,1) = std(avg_wave);   % one scalar
         end
-        % STD of whole EEG channel (regardless of IEDs)
+        
+        % STD of whole EEG channel, excluding -100 ms to +500 ms around each IED
         bipolar_full = eeg(idx1,:) - eeg(idx2,:);
-        std_full_channel(ch,1) = std(bipolar_full);
+        mask = true(1, size(eeg,2));
+
+        pre_exclude  = round(0.100 * fs);  % 100 ms before IED
+        post_exclude = round(0.500 * fs);  % 500 ms after IED
+
+        for i = 1:numel(aligned_samples)
+            center = aligned_samples(i);
+            start_idx = max(1, center - pre_exclude);
+            end_idx   = min(size(eeg,2), center + post_exclude);
+            mask(start_idx:end_idx) = false; % mark as excluded
+        end
+
+        std_full_channel(ch,1) = std(bipolar_full(mask));
+
     end
 
     % Store in fig
     fig.UserData.avgAllChannelsComputed = true;
     fig.UserData.avgAllChannels = avg_matrix;
-    fig.UserData.stdOverSegments    = std_over_segments;  % NEW
-    fig.UserData.stdFullChannel     = std_full_channel;   % NEW
+    fig.UserData.stdOverSegments    = std_over_segments;  % STD of the average IED waveform (per channel).
+    fig.UserData.stdFullChannel     = std_full_channel;   % STD of the channel’s EEG excluding IED windows (−100 ms to +500 ms).
     fig.UserData.avgAllChannelsSource = source;
     fig.UserData.avg_t = (-pre_samples:post_samples) / fs;
     plot_avg_template(fig, 'avgAllChannels');
@@ -1011,11 +1028,25 @@ end
 % To make all IEDs consistently aligned in time (mainchannel) before averaging
 % input: - avgTemplate25 (template), and adjusted/Original IED times from
 % the rest of IEDs that have not been manually marked in the firs GUI
-% ✅ Output:
+% Output:
 % fig.UserData.templateAlignedTimes: [nIEDs x 1] aligned sample indices
 % Saved .txt file: *_aligned_mainchan.txt with aligned IED times (in seconds)
 % Manual IEDs are left untouched
 % Remaining IEDs are shifted via cross-correlation (main channel only)
+% 1- Epileptologist provides all IED times (raw/adjusted times).
+    % → These are your adjusted_times.
+% 2- User manually refines some of them (~25, maybe fewer if some were unclear) in GUI #1.
+     % Those are your manual_times.
+     % You also track which ones were skipped during manual marking (skip_flags).
+% 3- You build a template average waveform from the manually aligned ones.
+% 4- Then you want to apply this template to all IEDs (epileptologist list), by:
+     % Keeping the manually aligned ones unchanged (their manual_times).
+     % For the rest (skipped + not manually marked), re-aligning them by cross-correlation around their original epileptologist time.
+% 5- So in the end, aligned_times should include:
+     % The manual times for those the user aligned.
+     % The cross-correlation adjusted times for all others
+
+% Takes the template.Keeps manual IEDs fixed, and re-aligns all others via cross-correlation.Produces fig.UserData.templateAlignedTimes (all IEDs, aligned).
 
 function align_all_ieds(fig)
 
@@ -1027,21 +1058,15 @@ function align_all_ieds(fig)
     wait = waitbar(0, 'Aligning all IEDs... Please wait.');
 
     try
-        % Align all original IEDs using cross-correlation with avgTemplate25
-        fs = fig.UserData.fs;
-        eeg = fig.UserData.eeg_data;
-        avg_template = fig.UserData.avgTemplate25;
-        manual_times = fig.UserData.manualIEDTimes;     % 25 manually marked IEDs
-        adjusted_times = fig.UserData.adjustedIEDTimes; % all detected IEDs (uploaded via second button)
+        % Inputs
+        fs            = fig.UserData.fs;
+        eeg           = fig.UserData.eeg_data;
+        avg_template  = fig.UserData.avgTemplate25;
+        manual_times  = fig.UserData.manualIEDTimes;     % ~25 manually aligned IEDs
+        adjusted_times = fig.UserData.adjustedIEDTimes;  % ALL IEDs from epileptologist
+        skip_flags    = fig.UserData.manualSkipFlags;    % true = not manually aligned
 
-        % Combine both sets of IEDs, avoiding duplicates
-        skip_flags = fig.UserData.manualSkipFlags;
-
-        if length(manual_times) ~= length(adjusted_times)
-            error('Manual and adjusted IED timing files must have the same number of entries.');
-        end
-
-        % === Get the main marking channel ===
+        % Main channel for alignment
         channelnames = fig.UserData.channelnames_bipolar;
         mono_map = containers.Map(fig.UserData.channelnames_mono, 1:numel(fig.UserData.channelnames_mono));
         main_label = strtrim(fig.UserData.marking_channel_used);
@@ -1055,43 +1080,32 @@ function align_all_ieds(fig)
         idx2 = mono_map(ch2);
 
         % Parameters
-        n_ieds = numel(fig.UserData.adjustedIEDTimes);  % ✅ adjusted/orig IED file
+        n_ieds       = numel(adjusted_times);   % total events
         template_len = length(avg_template);
-        
-        % aligned_times: single column vector for main channel only, 
-        % A vector of absolute IED times in seconds for all IEDs (both manual and cross-correlation adjusted).
         aligned_times = nan(n_ieds, 1);  
 
-        pre_samples = round(0.5 * fs);    % 1250 samples before the center
-        post_samples = round(0.5 * fs);   % 1250 samples after the center
-        search_margin = round(0.2 * fs);  % 500 samples (±200 ms): search ±200 msec around center
+        pre_samples   = round(0.5 * fs);    % 0.5 sec before
+        post_samples  = round(0.5 * fs);    % 0.5 sec after
+        search_margin = round(0.2 * fs);    % ±200 ms search window
 
         % === Main alignment loop
         for i = 1:n_ieds
-            if skip_flags(i)
-                % This IED was not manually marked — align it
-                center = round(adjusted_times(i) * fs); % center = adjusted/original IED times
-                % Define search window for segment of EEG is considered for cross-correlation
-                start_idx = center - search_margin - pre_samples;  % start_idx = center - 500 - 1250 = center - 1750
-                end_idx   = center + search_margin + post_samples; % end_idx   = center + 500 + 1250 = center + 1750
-                % full_segment = eeg(idx1, center - 1750 : center + 1750);
-                % Length = center + 1750 - (center - 1750) + 1 = 3501 samples
-                % At 2500 Hz → 3501 samples/ 2500 = 1.4004 seconds
-                % This is centered around the IED time ±0.7 sec
-                % You are preparing a large enough segment (±0.7 s) to: Later slide the template (which is 1.0 second long, 2500 samples) across a centered ±200 ms window (±500 samples)
-                % That’s why you need 0.7 s on both sides of the center to allow for this sliding.
+            center = round(adjusted_times(i) * fs);
 
+            if skip_flags(i)
+                % --- Not manually marked: align via cross-correlation
+                start_idx = center - search_margin - pre_samples;
+                end_idx   = center + search_margin + post_samples;
                 if start_idx < 1 || end_idx > size(eeg, 2)
                     continue;
                 end
 
                 full_segment = eeg(idx1, start_idx:end_idx) - eeg(idx2, start_idx:end_idx);
 
-                % Slide template across center ± search_margin
                 max_corr = -inf;
                 best_lag = 0;
 
-                for lag = -search_margin:search_margin % ±500 samples (±200 ms):  all 401 lags for alignment, from -200 ms to +200 ms.
+                for lag = -search_margin:search_margin
                     seg_start = search_margin + 1 + lag;
                     seg_end   = seg_start + template_len - 1;
 
@@ -1100,49 +1114,51 @@ function align_all_ieds(fig)
                     end
 
                     window = full_segment(seg_start:seg_end);
-                    [cross_corr, lags] = xcov(window, avg_template, 0, 'coeff'); % This slides the template25 over ±100 ms relative to the center.
+                    [cross_corr, lags] = xcov(window, avg_template, 0, 'coeff');
                     [c, max_idx] = max(cross_corr);
-                    best_lag = lags(max_idx);    % in samples
+                    lag_at_max   = lags(max_idx);
 
                     if ~isnan(c) && c > max_corr
                         max_corr = c;
-                        best_lag = lag;
+                        best_lag = lag_at_max; % refine alignment
                     end
                 end
 
-                % Update aligned time (shifted from adjusted time)
-                aligned_times(i) = (center + best_lag) / fs;  % convert back to seconds
+                aligned_times(i) = (center + best_lag) / fs;
+
             else
-                % Keep the manual marking as-is
+                % --- Manually aligned: keep the user-provided time
                 aligned_times(i) = manual_times(i);
             end
 
             waitbar(i / n_ieds, wait, sprintf('Aligning: %d/%d IEDs...', i, n_ieds));
         end
 
-        % === Store result
-        fig.UserData.templateAlignedTimes = round(aligned_times * fs); % in samples
+        % === Store results
+        fig.UserData.templateAlignedTimes     = round(aligned_times * fs); % in samples
         fig.UserData.templateAlignedTimes_sec = aligned_times;
-        fprintf('[✔] Stored %d aligned IEDs × %d channels in templateAlignedTimes.\n', size(aligned_times, 1), size(aligned_times, 2));
-        fprintf('[ℹ️] Includes %d manually marked IEDs and %d cross-correlation aligned IEDs.\n', sum(~fig.UserData.manualSkipFlags), sum(fig.UserData.manualSkipFlags));
 
-        aligned_secs = aligned_times / fs; % all IEDs after alignments using cross-corr (in seconds)
-%         avg_times = nanmean(aligned_secs, 2);
-        avg_times = mean(aligned_secs, 2, 'omitnan');
+        fprintf('[✔] Stored %d aligned IEDs in templateAlignedTimes.\n', n_ieds);
+        fprintf('[ℹ️] Includes %d manual and %d cross-correlation aligned IEDs.\n', ...
+                sum(~skip_flags), sum(skip_flags));
+
+        % Save aligned times to file
         save_path = fullfile(fig.UserData.output_dir, ...
             [fig.UserData.subject_id '_' fig.UserData.run_id '_' fig.UserData.ied_id '_final_aligned.txt']);
 
         fid = fopen(save_path, 'w');
         fprintf(fid, '# Channel used for IED alignment: %s\n', fig.UserData.marking_channel_used);
-        fprintf(fid, '%.2f\n', avg_times);
+        fprintf(fid, '# Col1 = original epileptologist time (s), Col2 = final aligned time (s)\n');
+        fprintf(fid, '%.3f\t%.3f\n', [adjusted_times(:), aligned_times(:)]');
         fclose(fid);
+
 
         fprintf('[💾] Saved aligned IED times to: %s\n', save_path);
 
-        % === Plot final average automatically
+        % Done
         uialert(fig, 'Main channel IED alignment complete. File saved.', 'Done');
 
-        catch ME
+    catch ME
         waitbar(1, wait, 'Error during alignment!');
         pause(1);
         close(wait);
@@ -1151,9 +1167,10 @@ function align_all_ieds(fig)
 
     waitbar(1, wait, 'Alignment complete.');
     pause(0.5);
-    %     close(wait);
+    % close(wait);
 
 end
+
 
 %% zoom in and out of the EEG traces
 function changeTimeWindow(fig)
@@ -1239,7 +1256,7 @@ function save_final_avg_template(fig)
     % Save PNG
     png_path = fullfile(save_dir, [base '_final_avg_template.png']);
     saveas(fig_avg, png_path);
-    %     close(fig_avg);
+    %     close(fig_avg);clear
     fprintf('[🖼] PNG export saved: %s\n', png_path);
 
     % ----------- SAVE NUMERIC DATA -------------
@@ -1247,17 +1264,19 @@ function save_final_avg_template(fig)
     avg_matrix              = fig.UserData.finalAvgTemplate;
     std_over_avg_segment    = fig.UserData.finalStdOverSegments;   % scalar per channel
     std_full_channel        = fig.UserData.finalStdFullChannel;    % scalar per channel
-    save(mat_path, 't', 'avg_matrix', 'std_over_avg_segment', 'std_full_channel', '-v7.3');
 
      channelnames         = fig.UserData.channelnames_bipolar;   % NEW: save channel labels
 
-     save(mat_path, 't', 'avg_matrix', 'std_over_avg_segment', 'std_full_channel', 'channelnames', '-v7.3');
      T = table(channelnames(:), std_over_avg_segment, std_full_channel, ...
-         'VariableNames', {'Channel', 'STD_AvgSegment', 'STD_FullChannel'});
+         'VariableNames', { ...
+         'Channel', ...
+         'STD_AvgIEDWaveform', ... % STD of the average IED waveform (per channel)
+         'STD_EEGBackgroundExcludingIEDs' ... % STD of EEG excluding IED windows (-100 to +500 ms)
+         });
+
      save(mat_path, 't', 'avg_matrix', 'std_over_avg_segment', 'std_full_channel', 'channelnames', 'T', '-v7.3');
 
-
-    fprintf('[💾] MAT file saved: %s\n', mat_path);
+     fprintf('[💾] MAT file saved: %s\n', mat_path);
 end
 
 

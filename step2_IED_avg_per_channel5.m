@@ -1088,6 +1088,8 @@ function align_all_ieds(fig)
         post_samples  = round(0.5 * fs);    % 0.5 sec after
         search_margin = round(0.2 * fs);    % ±200 ms search window
 
+        ied_amplitudes = nan(n_ieds,1);
+
         % === Main alignment loop
         for i = 1:n_ieds
             center = round(adjusted_times(i) * fs);
@@ -1131,6 +1133,12 @@ function align_all_ieds(fig)
                 aligned_times(i) = manual_times(i);
             end
 
+            % --- Get amplitude at aligned peak ---
+            aligned_idx = round(aligned_times(i) * fs);
+            if aligned_idx > 0 && aligned_idx <= size(eeg,2)
+                ied_amplitudes(i) = eeg(idx1, aligned_idx) - eeg(idx2, aligned_idx);
+            end
+
             waitbar(i / n_ieds, wait, sprintf('Aligning: %d/%d IEDs...', i, n_ieds));
         end
 
@@ -1141,6 +1149,12 @@ function align_all_ieds(fig)
         fprintf('[✔] Stored %d aligned IEDs in templateAlignedTimes.\n', n_ieds);
         fprintf('[ℹ️] Includes %d manual and %d cross-correlation aligned IEDs.\n', ...
                 sum(~skip_flags), sum(skip_flags));
+
+
+        % Store results
+        fig.UserData.templateAlignedTimes     = round(aligned_times * fs);
+        fig.UserData.templateAlignedTimes_sec = aligned_times;
+        fig.UserData.iedAmplitudes            = ied_amplitudes;
 
         % Save aligned times to file
         save_path = fullfile(fig.UserData.output_dir, ...
@@ -1158,6 +1172,57 @@ function align_all_ieds(fig)
         % Done
         uialert(fig, 'Main channel IED alignment complete. File saved.', 'Done');
 
+        % plot all the IED peaks after alignment
+        % --- Plot amplitudes vs time in a new figure (global view)
+        fig_global = figure('Color','w');
+        plot(fig.UserData.templateAlignedTimes_sec, fig.UserData.iedAmplitudes, 'o-', 'LineWidth', 2);
+        xlabel('Aligned IED time (s)');
+        ylabel('Amplitude (uV)');
+        title('IED Amplitude Consistency');
+        grid on;
+
+        % Save global plot
+        png_global = fullfile(fig.UserData.output_dir, ...
+            [fig.UserData.subject_id '_' fig.UserData.run_id '_' fig.UserData.ied_id '_amplitude_global.png']);
+        saveas(fig_global, png_global);
+        fprintf('[🖼] Global amplitude plot saved: %s\n', png_global);
+
+
+        % Subplots by time window
+        times = fig.UserData.templateAlignedTimes_sec;
+        amps  = fig.UserData.iedAmplitudes;
+
+        chunk_size = 200; % seconds per subplot
+        max_time   = max(times);
+        n_subplots = ceil(max_time / chunk_size);
+
+        fig_sub = figure('Color','w');
+        for k = 1:n_subplots
+            subplot(n_subplots,1,k);
+
+            % Define window
+            t_start = (k-1)*chunk_size;
+            t_end   = k*chunk_size;
+
+            % Select IEDs within this window
+            idx = times >= t_start & times < t_end;
+
+            if any(idx)
+                plot(times(idx), amps(idx), 'o-', 'LineWidth', 2);
+            end
+
+            xlabel('Aligned IED time (s)');
+            ylabel('Amplitude (uV)');
+            title(sprintf('IED Amplitudes (%.0f–%.0f s)', t_start, t_end));
+            grid on;
+        end
+        % Save subplot view
+        png_sub = fullfile(fig.UserData.output_dir, ...
+            [fig.UserData.subject_id '_' fig.UserData.run_id '_' fig.UserData.ied_id '_amplitude_subplots.png']);
+        saveas(fig_sub, png_sub);
+        fprintf('[🖼] Subplots amplitude plot saved: %s\n', png_sub);
+
+
     catch ME
         waitbar(1, wait, 'Error during alignment!');
         pause(1);
@@ -1165,11 +1230,14 @@ function align_all_ieds(fig)
         rethrow(ME);
     end
 
-    waitbar(1, wait, 'Alignment complete.');
-    pause(0.5);
-    % close(wait);
+    if isvalid(wait)
+        waitbar(1, wait, 'Alignment complete.');
+        pause(0.5);
+        close(wait);
+    end
 
 end
+
 
 
 %% zoom in and out of the EEG traces
@@ -1265,16 +1333,26 @@ function save_final_avg_template(fig)
     std_over_avg_segment    = fig.UserData.finalStdOverSegments;   % scalar per channel
     std_full_channel        = fig.UserData.finalStdFullChannel;    % scalar per channel
 
-     channelnames         = fig.UserData.channelnames_bipolar;   % NEW: save channel labels
+    channelnames         = fig.UserData.channelnames_bipolar;   % NEW: save channel labels
 
-     T = table(channelnames(:), std_over_avg_segment, std_full_channel, ...
-         'VariableNames', { ...
-         'Channel', ...
-         'STD_AvgIEDWaveform', ... % STD of the average IED waveform (per channel)
-         'STD_EEGBackgroundExcludingIEDs' ... % STD of EEG excluding IED windows (-100 to +500 ms)
-         });
+    % Collect amplitudes from main channel (if available)
+    if isfield(fig.UserData, 'iedAmplitudes')
+        ied_amplitudes = fig.UserData.iedAmplitudes;
+    else
+        ied_amplitudes = [];
+    end
 
-     save(mat_path, 't', 'avg_matrix', 'std_over_avg_segment', 'std_full_channel', 'channelnames', 'T', '-v7.3');
+    % Build summary table
+    T = table(channelnames(:), std_over_avg_segment, std_full_channel, ...
+        'VariableNames', { ...
+        'Channel', ...
+        'STD_AvgIEDWaveform', ...   % STD of average IED waveform (per channel)
+        'STD_BackgroundExclIEDs' ...% STD of EEG excluding IED windows
+        });
+
+    % Save everything into .mat
+    save(mat_path, 't', 'avg_matrix', 'std_over_avg_segment', 'std_full_channel', ...
+        'channelnames', 'T', 'ied_amplitudes', '-v7.3');
 
      fprintf('[💾] MAT file saved: %s\n', mat_path);
 end

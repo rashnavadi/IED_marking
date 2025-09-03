@@ -1161,11 +1161,14 @@ function align_all_ieds(fig)
         % plot all the IED peaks after alignment
         % --- Plot amplitudes vs time in a new figure (global view)
         fig_global = figure('Color','w');
-        plot(fig.UserData.templateAlignedTimes_sec, fig.UserData.iedAmplitudes, 'o-', 'LineWidth', 2);
+        h = plot(fig.UserData.templateAlignedTimes_sec, fig.UserData.iedAmplitudes, 'o-', 'LineWidth', 2);
         xlabel('Aligned IED time (s)');
         ylabel('Amplitude (uV)');
         title('IED Amplitude Consistency');
         grid on;
+
+        % Capture global y-limits
+        global_ylim = ylim(fig_global.CurrentAxes);
 
         % Save global plot
         png_global = fullfile(fig.UserData.output_dir, ...
@@ -1174,7 +1177,7 @@ function align_all_ieds(fig)
         fprintf('[🖼] Global amplitude plot saved: %s\n', png_global);
 
 
-        % Subplots by time window
+        % --- Subplots by time window ---
         times = fig.UserData.templateAlignedTimes_sec;
         amps  = fig.UserData.iedAmplitudes;
 
@@ -1201,13 +1204,16 @@ function align_all_ieds(fig)
             ylabel('Amplitude (uV)');
             title(sprintf('IED Amplitudes (%.0f–%.0f s)', t_start, t_end));
             grid on;
+
+            % Apply global y-limits from the main plot
+            ylim(global_ylim);
         end
+
         % Save subplot view
         png_sub = fullfile(fig.UserData.output_dir, ...
             [fig.UserData.subject_id '_' fig.UserData.run_id '_' fig.UserData.ied_id '_amplitude_subplots.png']);
         saveas(fig_sub, png_sub);
         fprintf('[🖼] Subplots amplitude plot saved: %s\n', png_sub);
-
 
     catch ME
         waitbar(1, wait, 'Error during alignment!');

@@ -899,17 +899,6 @@ function plot_avg_template(fig, template_key)
     end
 
     % PLOTTING ==== Compute global safe Y-limit based on all visible channels ====
-%     visible_traces = avg_data(visibleIdx, :);
-%     global_min = min(visible_traces(:));
-%     global_max = max(visible_traces(:));
-%     yrange = global_max - global_min;
-%     if yrange == 0
-%         pad = 1;  % minimum padding if all values are the same
-%     else
-%         pad = 0.1 * yrange;
-%     end
-%     global_ylim = [global_min - pad, global_max + pad];
-
     % Plot traces
     for i = 1:length(axesHandles)
         ax = axesHandles(i);
@@ -1003,12 +992,9 @@ function plot_avg_template(fig, template_key)
             chIdx = (fig.UserData.currentPage - 1) * fig.UserData.tracesPerPage + i;
             ax.Title.String = sprintf('Channel %d (empty)', chIdx);
             ax.XLim = [t(1), t(end)];
-            if numel(global_ylim) == 2 && all(isfinite(global_ylim)) && diff(global_ylim) > 0
-                ax.YLim = global_ylim;
-            else
-                ax.YLim = [-1 1];
-                warning('[⚠️] Invalid Y-limits in EMPTY axis (%d). Using fallback [-1 1].', i);
-            end
+            ax.YLim = [-1 1];  % fallback for empty axes
+            warning('[⚠️] Invalid Y-limits in EMPTY axis (%d). Using fallback [-1 1].', i);
+
         end
     end
 
@@ -1382,7 +1368,6 @@ function handle_click_on_avg(fig, src, ~)
     end
 
     click_ax = src;  % use the actual clicked axis!
-
     if ~isa(click_ax, 'matlab.ui.control.UIAxes')
         return;
     end
@@ -1394,66 +1379,63 @@ function handle_click_on_avg(fig, src, ~)
     ax_list = fig.UserData.axesHandles;
     ch_offset = (fig.UserData.currentPage - 1) * fig.UserData.tracesPerPage;
     ax_idx = find(ax_list == click_ax, 1);
-
-    if isempty(ax_idx)
-        return;
-    end
+    if isempty(ax_idx), return; end
     ch_idx = ch_offset + ax_idx;
 
-    % Save the time
+    % --- Handle onset marking ---
     if fig.UserData.isMarkingOnset
-        alreadyMarked = ~isnan(fig.UserData.onsetTimes(ch_idx));
-        if alreadyMarked
+        if isnan(fig.UserData.onsetTimes(ch_idx))
+            % First onset → set directly
+            fig.UserData.onsetTimes(ch_idx) = x_click;
+        else
+            % Already onset → ask if user wants to replace
             choice = uiconfirm(fig, ...
                 sprintf('Onset already marked on channel %d.\nReplace with new time?', ch_idx), ...
                 'Replace Onset?', ...
-                'Options', {'Yes', 'No'}, ...
-                'DefaultOption', 2);
-            if strcmp(choice, 'No')
+                'Options', {'Yes','No'}, 'DefaultOption', 2);
+            if strcmp(choice, 'Yes')
+                fig.UserData.onsetTimes(ch_idx) = x_click;
+            else
                 return;
             end
         end
-        fig.UserData.onsetTimes(ch_idx) = x_click;
         clr = [0 0.6 0];
         label_type = 'onset';
 
+    % --- Handle peak marking ---
     elseif fig.UserData.isMarkingPeak
-        alreadyMarked = ~isnan(fig.UserData.peakTimes(ch_idx));
-        if alreadyMarked
+        if isnan(fig.UserData.peakTimes(ch_idx))
+            % First peak → set directly
+            fig.UserData.peakTimes(ch_idx) = x_click;
+        else
+            % Already peak → ask if user wants to replace
             choice = uiconfirm(fig, ...
                 sprintf('Peak already marked on channel %d.\nReplace with new time?', ch_idx), ...
                 'Replace Peak?', ...
-                'Options', {'Yes', 'No'}, ...
-                'DefaultOption', 2);
-            if strcmp(choice, 'No')
+                'Options', {'Yes','No'}, 'DefaultOption', 2);
+            if strcmp(choice, 'Yes')
+                fig.UserData.peakTimes(ch_idx) = x_click;
+            else
                 return;
             end
         end
-        fig.UserData.peakTimes(ch_idx) = x_click;
         clr = [0.5 0 0.8];
         label_type = 'peak';
-
-    else
-        label_type = 'unknown';
-        return;
     end
 
-    % Draw a vertical line at that point
+    % --- Draw a vertical line ---
     hold(click_ax, 'on');
-    % Remove existing xline of the same type (if any)
+    % Remove existing xline of the same type (color-based)
     existing_lines = findall(click_ax, 'Type', 'ConstantLine', 'Color', clr);
     delete(existing_lines);
-
     xline(click_ax, x_click, '--', 'Color', clr, 'LineWidth', 2);
     hold(click_ax, 'off');
 
-    % Keep marking mode ON (continuous marking mode)
-    fig.Pointer = 'crosshair';  % keep crosshair
-    % Do NOT reset isMarkingOnset / isMarkingPeak
-
-
+    % Keep marking mode ON
+    fig.Pointer = 'crosshair';
     fprintf('Marked %s at %.3f sec on channel %d\n', label_type, x_click, ch_idx);
 end
+
 
 %% function 12
 function save_onset_peak_times(fig)

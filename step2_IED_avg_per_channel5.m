@@ -2,7 +2,7 @@
 
 %% Launch first GUI to manually find the peak in the main channel
 % By Tahere Rashnavadi
-% Last update: June 11, 2025
+% Last update: Sep 19, 2025
 % NOTES:
 %== 
 % by adjusted IED times i mean original IED times, they were named adjusted because the original timings marked by the epileptologists were
@@ -241,11 +241,19 @@ function select_eeg_file(fig)
         return;
     end
 
-    % Step 4: Build bipolar channel pairs
-    bipolar_labels = cell(1, length(c_Labels) - 1);
+    % Step 4: Build bipolar channel pairs (only valid ones)
+    bipolar_labels = {};
     for i = 1:length(c_Labels) - 1
-        bipolar_labels{i} = [c_Labels{i} '-' c_Labels{i+1}];
+        % Extract alphabetic prefix (letters only) from each channel
+        prefix1 = regexp(c_Labels{i}, '^[A-Za-z]+', 'match', 'once');
+        prefix2 = regexp(c_Labels{i+1}, '^[A-Za-z]+', 'match', 'once');
+
+        % Only form a bipolar pair if the alphabetic prefixes match
+        if strcmp(prefix1, prefix2)
+            bipolar_labels{end+1} = [c_Labels{i} '-' c_Labels{i+1}]; %#ok<AGROW>
+        end
     end
+
 
     % Step 5: Save into UserData
     fig.UserData.fs = s_Rate;
@@ -963,6 +971,7 @@ function plot_avg_template(fig, template_key)
             ax.ButtonDownFcn = @(src, event) handle_click_on_avg(fig, src, event);
             ax.HitTest = 'on';
             ax.PickableParts = 'all';
+            
             xlim(ax, [t(1), t(end)]);
             if numel(safe_ylim) == 2 && all(isfinite(safe_ylim)) && diff(safe_ylim) > 0
                 ylim(ax, safe_ylim);

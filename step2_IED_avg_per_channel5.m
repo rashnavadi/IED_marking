@@ -816,6 +816,29 @@ function compute_avg_all_channels(fig)
     fig.UserData.finalStdFullChannel     = std_full_channel;
     save_final_avg_template(fig);  % Reuse the save function
 
+    % === NEW BLOCK: Save the averaged waveforms for all channels ===
+    [ied_folder, ~, ~] = fileparts(fig.UserData.ied_txt_path);
+    [parent_dir, ~, ~] = fileparts(ied_folder);
+    save_dir = fullfile(parent_dir, 'avg_onset_peak_times');
+    if ~exist(save_dir, 'dir'), mkdir(save_dir); end
+
+    base = sprintf('%s_%s_%s', fig.UserData.subject_id, fig.UserData.run_id, fig.UserData.ied_id);
+
+    avg_waveform_all = avg_matrix;
+    t = fig.UserData.avg_t;
+    channelnames = fig.UserData.channelnames_bipolar;
+
+    save(fullfile(save_dir, [base '_avgAllChannels_allIEDs.mat']), ...
+         'avg_waveform_all', 't', 'channelnames', ...
+         'std_over_segments', 'std_full_channel');
+
+    fprintf('[💾] Saved averaged waveforms for all %d channels to %s\n', ...
+            numel(channelnames), save_dir);
+
+    % Optional alert popup in GUI
+    msg = sprintf('✅ Averaged waveforms for ALL channels were saved to:\n\n%s', save_dir);
+    uialert(fig, msg, 'All Channels Avg Saved');
+
 
     fprintf('[✔] Computed average EEG for all channels using "%s".\n', source);
 end

@@ -1259,6 +1259,9 @@ function align_all_ieds(fig)
         pause(0.5);
         close(wait);
     end
+    save(fullfile(fig.UserData.output_dir, ...
+        [fig.UserData.subject_id '_' fig.UserData.run_id '_' fig.UserData.ied_id '_alignedTimes.mat']), ...
+        'aligned_times', 'fs');
 
 end
 
